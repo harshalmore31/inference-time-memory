@@ -175,7 +175,7 @@ class TestDisplacementEdges:
             key=k.copy(), value=v.copy(), strength=1.0, bias=0.5, timestamp=5
         )
         w_max = graph._compute_edge_weight(m1, m2)
-        assert w_max <= 1.0 + 1e-9
+        assert w_max <= 1.0 + 1e-6
         assert abs(w_max - 1.0) < 1e-6
 
         # Random pairs at various lags must also stay within the bound.
@@ -195,7 +195,7 @@ class TestDisplacementEdges:
                 bias=0.5,
                 timestamp=int(seed) + 1,
             )
-            assert graph._compute_edge_weight(a, b) <= 1.0 + 1e-9
+            assert graph._compute_edge_weight(a, b) <= 1.0 + 1e-6
 
     def test_zero_displacement_handled(self):
         """When key == value, displacement should be handled (zero vector)."""

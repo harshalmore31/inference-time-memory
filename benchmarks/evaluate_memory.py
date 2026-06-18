@@ -25,7 +25,6 @@ import argparse
 import json
 import os
 import sys
-import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -33,23 +32,23 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import numpy as np
-from openai import OpenAI
-from dotenv import load_dotenv
-from tqdm import tqdm
-from collections import Counter
 import string
+from collections import Counter
+
+import numpy as np
 import regex
+from dotenv import load_dotenv
+
+# ── LOCOMO scoring functions (inlined to avoid bert_score dependency) ──
+# These are the exact implementations from LOCOMO's evaluation.py
+from nltk.stem import PorterStemmer
+from openai import OpenAI
+from tqdm import tqdm
 
 from itm.config import MemoryConfig
 from itm.core import MemoryLayer
 from itm.embeddings import EmbeddingService
 from itm.formatting import MemoryFormatter
-
-# ── LOCOMO scoring functions (inlined to avoid bert_score dependency) ──
-# These are the exact implementations from LOCOMO's evaluation.py
-
-from nltk.stem import PorterStemmer
 
 _ps = PorterStemmer()
 
@@ -323,7 +322,7 @@ def ingest_conversation_direct(
 
     if verbose:
         print(f"  Direct ingest: {total_turns} turns → {len(layer.memories)} memories")
-        print(f"  Graph edges built for all memories")
+        print("  Graph edges built for all memories")
 
     return {
         "total_turns": total_turns,
@@ -599,9 +598,7 @@ def main():
     config_kwargs["transcript_ingest"] = (
         os.environ.get("ITM_TRANSCRIPT_INGEST", "0") == "1"
     )
-    config_kwargs["spreading_debias_enabled"] = (
-        os.environ.get("ITM_DEBIAS", "0") == "1"
-    )
+    config_kwargs["spreading_debias_enabled"] = os.environ.get("ITM_DEBIAS", "0") == "1"
     if args.top_k is not None:
         config_kwargs["top_k"] = args.top_k
     if args.n_hops is not None:
@@ -710,12 +707,8 @@ def main():
 
             # Was at least one gold evidence turn present in the recalled top-k?
             evidence = qa.get("evidence", []) or []
-            recalled_dia = {
-                text_to_dia.get(m.input_text) for m, _ in recalled
-            }
-            gold_present = bool(evidence) and any(
-                d in recalled_dia for d in evidence
-            )
+            recalled_dia = {text_to_dia.get(m.input_text) for m, _ in recalled}
+            gold_present = bool(evidence) and any(d in recalled_dia for d in evidence)
 
             # 4. SCORE — F1
             f1_val = score_f1(prediction, answer, category)
@@ -846,9 +839,7 @@ def main():
     # ── Save results ──
     # Tag filenames with the ablation config so baseline/+A/+A+B runs do not
     # overwrite each other.
-    tag = (
-        f"A{int(config.transcript_ingest)}B{int(config.spreading_debias_enabled)}"
-    )
+    tag = f"A{int(config.transcript_ingest)}B{int(config.spreading_debias_enabled)}"
     os.makedirs(args.out_dir, exist_ok=True)
 
     results_path = os.path.join(args.out_dir, f"locomo_memory_results_{tag}.json")
