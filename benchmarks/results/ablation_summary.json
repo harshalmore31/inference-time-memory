@@ -1,0 +1,105 @@
+{
+  "benchmark": "LOCOMO (ACL 2024), full set",
+  "dataset_file": "benchmarks/locomo/data/locomo10.json",
+  "conversations": 10,
+  "questions_total": 1986,
+  "questions_answerable_cats_1_4": 1540,
+  "questions_adversarial_cat5": 446,
+  "answer_model": "gpt-4.1-nano",
+  "judge_model": "gpt-4.1-nano",
+  "embedding_model": "BAAI/bge-m3",
+  "top_k": 5,
+  "n_hops": 2,
+  "single_seed": true,
+  "error_bars": false,
+  "note": "Aggregates are reproduced directly from the per-question result files locomo_memory_results_{A0B0,A1B0,A1B1}.json. Toggles: A = transcript_ingest (ITM_TRANSCRIPT_INGEST), B = spreading_debias_enabled (ITM_DEBIAS). Both default OFF in itm/config.py.",
+  "category_map": {
+    "1": "multi_hop",
+    "2": "temporal",
+    "3": "open_domain",
+    "4": "single_hop",
+    "5": "adversarial"
+  },
+  "configs": [
+    {
+      "tag": "A0B0",
+      "label": "baseline",
+      "transcript_ingest": false,
+      "spreading_debias_enabled": false,
+      "answerable_judge": 0.0357,
+      "answerable_judge_refusal_hardened": 0.0351,
+      "answerable_f1": 0.0428,
+      "answerable_refusal_rate_pct": 86.9,
+      "answerable_gold_present_pct": 5.3,
+      "answerable_judge_when_gold_present": 0.3333,
+      "overall_judge_incl_adversarial": 0.2477,
+      "per_category_judge": {
+        "multi_hop": 0.0461,
+        "temporal": 0.0187,
+        "open_domain": 0.0104,
+        "single_hop": 0.0416,
+        "adversarial": 0.9798
+      }
+    },
+    {
+      "tag": "A1B0",
+      "label": "+A (transcript_ingest)",
+      "transcript_ingest": true,
+      "spreading_debias_enabled": false,
+      "answerable_judge": 0.1974,
+      "answerable_judge_refusal_hardened": 0.1974,
+      "answerable_f1": 0.1883,
+      "answerable_refusal_rate_pct": 51.49,
+      "answerable_gold_present_pct": 41.3,
+      "answerable_judge_when_gold_present": 0.3491,
+      "overall_judge_incl_adversarial": 0.3545,
+      "per_category_judge": {
+        "multi_hop": 0.1064,
+        "temporal": 0.1371,
+        "open_domain": 0.0104,
+        "single_hop": 0.2723,
+        "adversarial": 0.8969
+      }
+    },
+    {
+      "tag": "A1B1",
+      "label": "+A+B (transcript_ingest + spreading_debias)",
+      "transcript_ingest": true,
+      "spreading_debias_enabled": true,
+      "answerable_judge": 0.3058,
+      "answerable_judge_refusal_hardened": 0.3052,
+      "answerable_f1": 0.2798,
+      "answerable_refusal_rate_pct": 33.44,
+      "answerable_gold_present_pct": 65.6,
+      "answerable_judge_when_gold_present": 0.3762,
+      "overall_judge_incl_adversarial": 0.4295,
+      "per_category_judge": {
+        "multi_hop": 0.2021,
+        "temporal": 0.2150,
+        "open_domain": 0.1042,
+        "single_hop": 0.3983,
+        "adversarial": 0.8565
+      }
+    }
+  ],
+  "robustness": {
+    "refusal_hardened_rescoring": {
+      "description": "A refusal ('Not mentioned') on an answerable question is forced to 0 before averaging. Slope on answerable cats 1-4.",
+      "answerable_judge": [0.0351, 0.1974, 0.3052]
+    },
+    "independent_judge_gpt_4_1_mini": {
+      "description": "A paired 200-question stratified subsample (conv-41, conv-42; the conversations present in all three result files) was re-graded with gpt-4.1-mini on the SAME stored predictions. See rejudge_mini_subsample.json. The improvement direction (baseline < +A+B) is preserved; the mini judge is more lenient on the baseline (it credits some refusal-adjacent predictions), which compresses the slope on this small slice.",
+      "subsample_questions": 200,
+      "nano_vs_mini_agreement_all_pairs": 0.745,
+      "mini_answerable_judge_baseline_to_AB": [0.305, 0.34],
+      "slope_direction_survives": true
+    }
+  },
+  "ceiling": {
+    "answer_model_bottleneck": "Even when gold evidence IS in the recalled top-5 context, gpt-4.1-nano answers correctly only ~37.6% of the time (answerable_judge_when_gold_present at A1B1). ITM's contribution is retrieving the right evidence (gold-in-top5: 5.3% -> 41.3% -> 65.6%), not reasoning over it.",
+    "weakest_category": "open_domain (cat 3) at 10.4%; multi_hop (cat 1) at 20.2%",
+    "abstention_cost": "Better recall costs a few points of appropriate abstention on adversarial trap questions: adversarial judge 0.9798 -> 0.8969 -> 0.8565.",
+    "top_k": "top_k=5 is a lower bound on retrieval; larger k was not swept here.",
+    "caveat": "Single seed, no error bars. This is a relative-improvement ablation, NOT a SOTA-competitive absolute accuracy."
+  }
+}

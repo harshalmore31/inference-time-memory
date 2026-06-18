@@ -1,0 +1,72 @@
+{
+  "mode": "full_pipeline",
+  "config": "+A+B (A1B1)",
+  "model": "gpt-4.1-nano",
+  "judge_model": "gpt-4.1-nano",
+  "memory_config": {
+    "top_k": 5,
+    "n_hops": 2,
+    "theta_create": 0.75,
+    "beta_gate": 6.0,
+    "theta_gate": 0.4,
+    "embedding_model": "BAAI/bge-m3",
+    "transcript_ingest": true,
+    "spreading_debias_enabled": true
+  },
+  "overall_f1": 0.4109,
+  "overall_judge": 0.4295,
+  "answerable": {
+    "count": 1540,
+    "f1": 0.2798,
+    "judge": 0.3058,
+    "gold_present_pct": 65.6,
+    "judge_when_gold_present": 0.3762,
+    "judge_when_gold_absent": 0.1717
+  },
+  "refusal_rate_answerable_pct": 33.44,
+  "by_category": {
+    "1": {
+      "count": 282,
+      "f1": 0.1489,
+      "judge": 0.2021,
+      "avg_recalled": 5.0
+    },
+    "2": {
+      "count": 321,
+      "f1": 0.219,
+      "judge": 0.215,
+      "avg_recalled": 5.0
+    },
+    "3": {
+      "count": 96,
+      "f1": 0.0946,
+      "judge": 0.1042,
+      "avg_recalled": 5.0
+    },
+    "4": {
+      "count": 841,
+      "f1": 0.3681,
+      "judge": 0.3983,
+      "avg_recalled": 5.0
+    },
+    "5": {
+      "count": 446,
+      "f1": 0.8632,
+      "judge": 0.8565,
+      "avg_recalled": 5.0
+    }
+  },
+  "memory_stats": {
+    "avg_memories_per_conv": 588.2,
+    "avg_recalled_per_question": 5.0,
+    "avg_filtered_pct": 0.0
+  },
+  "calls": {
+    "answer": 1986,
+    "judge": 1986,
+    "total": 3972,
+    "errors_graced": 0
+  },
+  "n_questions": 1986,
+  "elapsed_sec": 4822.2
+}

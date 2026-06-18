@@ -39,8 +39,33 @@ memory_data/
 /research/
 research.md
 
-# Benchmarks (generated)
-benchmarks/
+# Benchmarks
+# Ignore everything under benchmarks/ by default, then re-include the
+# canonical, reproducible harness and the small result aggregates only.
+benchmarks/*
+!benchmarks/README.md
+!benchmarks/evaluate_memory.py
+
+# Keep only the small result aggregates, not the large per-question dumps,
+# logs, or intermediate progress/checkpoint files.
+!benchmarks/results/
+benchmarks/results/*
+!benchmarks/results/locomo_memory_stats_A0B0.json
+!benchmarks/results/locomo_memory_stats_A1B0.json
+!benchmarks/results/locomo_memory_stats_A1B1.json
+!benchmarks/results/ablation_summary.json
+!benchmarks/results/rejudge_mini_subsample.json
+
+# Stays ignored: the ~22MB LOCOMO dataset, run logs, large per-question result
+# dumps, progress/checkpoint files, ad-hoc diagnostic and runner scripts.
+benchmarks/locomo/
+benchmarks/diag_*.py
+benchmarks/run_full_*.py
+benchmarks/rejudge_*.py
+benchmarks/results/logs/
+benchmarks/results/resume_*/
+benchmarks/results/_progress_*.json
+benchmarks/results/locomo_memory_results_*.json
 
 # AI tool configs
 CLAUDE.md

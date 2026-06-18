@@ -1,45 +1,91 @@
 # Inference-Time Memory (ITM)
 
-**A Neural Memory Layer for Continuous Learning in Frozen Language Models**
-
-**29 equations. Zero LLM calls for memory ops. Pure math.**
+A long-term memory layer for LLM agents whose memory operations are pure
+numpy on a local embedder. Recall, strength updates, contradiction handling,
+graph spreading, and consolidation are defined by 29 neural-network-derived
+equations and run with zero LLM API calls. The only model ITM loads for memory
+work is a local sentence embedder (BGE-M3 by default).
 
 [![Tests](https://img.shields.io/badge/Tests-197_passing-brightgreen.svg)]()
 [![Equations](https://img.shields.io/badge/Equations-29-blue.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Large Language Models are frozen after training. They cannot learn from interactions, adapt to contradictions, or consolidate facts over time. Current solutions (RAG, mem0, MemGPT) rely on LLM calls for memory classification and extraction — they are storage systems, not learning systems.
+Large Language Models are frozen after training. They cannot accumulate facts
+across a long conversation or revise an earlier statement. ITM is a small
+memory substrate that sits next to a frozen model: it ingests dialogue,
+strengthens what gets used, lets corrections drift the stored representation,
+and retrieves evidence at query time. Every one of those operations is a
+closed-form update over embedding vectors, derived from a specific neural
+network mechanism (Perceptron, LSTM gate, GNN message passing, GAT attention,
+BM25, ACT-R decay, prospect theory).
 
-**Inference-Time Memory (ITM)** is a differentiable, graph-based cognitive architecture that runs alongside any frozen LLM. Inspired by 70 years of neural network history — from the Perceptron (1958) to Graph Attention Networks (2018) — ITM gives language models a living memory that strengthens, decays, associates, and adapts in real-time using pure mathematical equations.
+What ITM does NOT do: it does not call an LLM to classify, extract, or
+summarize memories, and it does not improve the answering model's reasoning.
+Its job is to put the right evidence in front of the model. The measured
+results below show that this is where most of the lift comes from, and also
+where the ceiling is.
 
 ---
 
-## Why ITM is Different
+## What is true and measured (read this first)
 
-| | RAG / mem0 / MemGPT | **ITM** |
-|---|---|---|
-| **Memory ops** | LLM calls for classify/extract/summarize | Zero LLM calls — pure math |
-| **Learning** | Static storage + retrieval | Continuous Hebbian learning |
-| **Contradictions** | Delete + re-insert | Gradient-descent value drift (Eq 2) |
-| **Multi-hop** | Single-hop similarity | GNN spreading activation (Eq 5) |
-| **Recall** | Cosine similarity only | 5-head attention + BM25 hybrid (Eq 9, 19) |
-| **Decay** | Manual TTL / none | ACT-R power-law decay (Eq 17) |
-| **Cost** | $0.01-0.05 per memory op | $0.00 — numpy only |
+ITM was evaluated on the full LOCOMO benchmark (10 conversations, 1986
+questions) with `gpt-4.1-nano` answering and judging, BGE-M3 embeddings, and
+`top_k=5`. The headline is a controlled ablation of two memory behaviors, not
+an absolute-accuracy or head-to-head claim:
 
-### Key Capabilities
+- On answerable questions (LOCOMO cats 1-4, n=1540), judge accuracy goes
+  3.57% -> 19.74% -> 30.58% as two flags are turned on (8.6x relative lift).
+- The reason is retrieval: gold evidence appears in the recalled top-5
+  5.3% -> 41.3% -> 65.6% of the time.
+- The honest ceiling: even when gold IS in context, `gpt-4.1-nano` answers
+  correctly only ~38% of the time. ITM retrieves the evidence; the answer
+  model is the bottleneck.
 
-1. **Continuous Learning (No Fine-Tuning):** Memories have learned strengths and biases. Hebbian-like updates strengthen useful memories and decay unused ones — the system learns what matters.
-2. **Adaptive Belief Updating:** Corrections trigger soft value drifts (gradient-descent inspired) that adjust memory representations in latent space, handling contradictions without deletion rules.
-3. **Multi-Hop Synthesis via GNN:** A graph neural network connects memories by semantic/temporal proximity. Activation spreads through the graph, synthesizing disconnected facts (A knows B + B lives in C → A might visit C).
-4. **5-Head Attention + BM25 Hybrid:** Semantic, answer-similarity, context, recency, and sparse lexical heads combine for recall that catches both meaning and exact keywords.
-5. **Prospect Theory Gating:** Kahneman-inspired asymmetric weighting means gains (new useful info) are valued differently from losses (redundant info), improving what gets stored.
-6. **Query-Aware Spreading:** GAT-style attention ensures only query-relevant memories participate in graph activation — well-connected but irrelevant memories can't steal signal.
+The full table, the metrics, the robustness checks, and the caveats are in
+[Results](#results). The benchmark is reproducible from this repo; see
+[`benchmarks/README.md`](benchmarks/README.md).
+
+---
+
+## Design properties
+
+These are the genuine, code-backed properties of the system.
+
+- Zero LLM API calls for memory operations. Recall, the strength/value
+  updates, contradiction drift, graph spreading, and consolidation are numpy
+  over embedding vectors (`itm/core.py`, `itm/graph.py`, `itm/hierarchy.py`).
+  Embeddings are computed locally by default (BGE-M3 via
+  `sentence-transformers`); the optional `[api]` backends are paid services.
+- Continuous strength learning. Each memory has a learned strength updated by
+  a Perceptron-style rule (Eq 1) with ACT-R power-law decay (Eq 17). Nothing
+  is pruned; strength encodes relevance, not existence.
+- Contradiction by drift, not delete. A correction moves the stored value
+  vector toward the new statement (Eq 2) instead of removing and re-inserting.
+- Graph recall. Memories are linked by semantic/temporal proximity (Eq 4) and
+  activation spreads through the graph (Eq 5), with GAT-style query-aware
+  message passing (Eq 21) and JK-Net multi-scale pooling (Eq 20).
+- Hybrid retrieval. A multi-head recall (semantic, answer, context, recency)
+  combines with a BM25 sparse lexical head (Eq 9, 19) so exact-keyword matches
+  are not lost in dense space.
+- 197 unit tests, including per-equation property tests, on a deterministic
+  fake embedder. Lint (ruff), format (black), type-check (mypy), and the test
+  suite run in GitHub Actions CI.
+
+### Latency, honestly
+
+Recall is synchronous: ITM embeds the query and runs the numpy recall before
+the LLM call, so it adds latency to each request. Only the post-response
+memory update (embed the output, update strengths/edges, persist) runs in a
+background thread and does not block the response. This is described in the
+`itm/patch.py` module docstring and is the actual behavior of `enable_memory`.
 
 ---
 
 ## The 29 Equations
 
-Every behavior in ITM is mathematically defined. No heuristics, no LLM classification, no rules.
+Every memory behavior is a closed-form update mapped to a neural-network
+mechanism. No heuristics, no LLM classification.
 
 ### Phase 1: Core Memory (Perceptron + GNN)
 
@@ -59,31 +105,31 @@ Every behavior in ITM is mathematically defined. No heuristics, no LLM classific
 | # | Name | Equation | Neural Network Origin |
 |---|------|----------|----------------------|
 | 8 | Context Vector | `c_t = λ·c_{t-1} + (1-λ)·e_in_t` | RNN hidden state |
-| 9 | Multi-Head Recall | 4 heads: semantic + answer + context + recency | Multi-head attention (2017) |
+| 9 | Multi-Head Recall | semantic + answer + context + recency heads | Multi-head attention (2017) |
 | 10 | Enhanced Gate | Primary + R_out/R_val/D_ctx penalties + hard ceiling | Deep gate networks |
-| 11 | Adaptive Head Weights | Softmax over head confidences | Mixture of experts |
+| 11 | Adaptive Head Weights | Softmax over head confidences (default off) | Mixture of experts |
 
 ### Phase 2: Cognitive Science (Kahneman + ACT-R)
 
 | # | Name | Equation | Origin |
 |---|------|----------|--------|
 | 12 | Prospect Strength | `Δs_gain·1.0` vs `Δs_loss·λ` (λ=2.25) | Kahneman prospect theory (1979) |
-| 13 | Tension Detection | `T = 1 - max_sim` among recalled memories | WYSIATI-breaking conflict detection |
+| 13 | Tension Detection | conflict among recalled memories | WYSIATI-breaking conflict detection |
 | 14 | Category Channels | fact / preference / instruction / event routing | Dual-process theory |
 | 15 | Adaptive-k Recall | k scales with query difficulty | ACT-R retrieval threshold |
 | 16 | Feedback Loop | Strengthen/weaken recalled based on response | Reinforcement learning |
 | 17 | ACT-R Decay | `s_i *= (1 + t_idle)^(-d)` | ACT-R power-law decay (Anderson 1993) |
 
-### Phase 3: MemWire-Inspired (ResNet + BM25 + JK-Net + GAT)
+### Phase 3: Retrieval (ResNet + BM25 + JK-Net + GAT)
 
 | # | Name | Equation | Neural Network Origin |
 |---|------|----------|----------------------|
-| 18 | Displacement Edges | `d_i = normalize(v_i - k_i)`; α_k,α_v,α_d renormalized into Eq 4 (convex) | ResNet residual connections (2015) |
+| 18 | Displacement Edges | `d_i = normalize(v_i - k_i)`; renormalized into Eq 4 (convex) | ResNet residual connections (2015) |
 | 19 | Sparse Lexical Recall | TF-IDF sparse vectors + BM25 scoring | BM25 (Robertson 1994) |
 | 20 | Multi-Scale Activation | `a_final = Σ_l(w_l·a^(l))` with per-hop damping | JK-Net (Xu et al. 2018) |
-| 21 | Query-Aware Spreading | `msg_ij = w_ij·a_j·sim(q, k_j)` | GAT attention (Veličković 2018) |
+| 21 | Query-Aware Spreading | `msg_ij = w_ij·a_j·sim(q, k_j)` | GAT attention (Velickovic 2018) |
 
-### Phase 4: Scaling & Robustness (Research.md §14-18)
+### Phase 4: Scaling & Robustness
 
 | # | Name | Equation | Neural Network Origin |
 |---|------|----------|----------------------|
@@ -93,8 +139,11 @@ Every behavior in ITM is mathematically defined. No heuristics, no LLM classific
 | 25 | Soft Create-vs-Strengthen | `p_str = σ(β·(sim - θ_local))` | Sigmoid activation (1986) |
 | 26 | Adaptive Sharpness | `β = β_min + (β_max-β_min)·saturation` | Temperature scaling (softmax) |
 | 27 | Adaptive Threshold | `θ_local = θ_base + β_θ·density(q)` | Adam optimizer / BatchNorm |
-| 28 | Cold Start Boost | `α_eff = α·(1 + κ·exp(-n/τ))` | Inverted learning rate warmup |
+| 28 | Cold Start Boost | `α_eff = α·(1 + κ·exp(-n/τ))` | Inverted learning-rate warmup |
 | 29 | Shared Memory Merge | `R = (1-w_s)·R_personal + w_s·R_shared` | Federated averaging (McMahan 2017) |
+
+Equation 29 is a configuration placeholder (the merge weight exists in
+`config.py`); the full cross-store merge is not implemented.
 
 ---
 
@@ -118,7 +167,7 @@ pip install -e .[api]
 
 ### Usage
 
-Two lines to add memory to any OpenAI client:
+Two lines to add memory to an OpenAI client:
 
 ```python
 from openai import OpenAI
@@ -143,15 +192,14 @@ config = MemoryConfig(
 
 mem = enable_memory(client, config)
 
-# Use normally — memory is transparent
+# Recall runs synchronously before the call; the memory update is backgrounded.
 response = client.responses.create(
     model="gpt-4.1-nano",
-    input="Hi, I'm Harshal. I study at VIT."
+    input="Hi, I'm a new user. I study computer science.",
 )
 print(response.output_text)
 
-# Memory update runs in background thread — zero latency added
-mem.flush()
+mem.flush()      # wait for background memory updates
 mem.shutdown()
 ```
 
@@ -171,90 +219,147 @@ recall <query>     # search memories by query
 ## Architecture
 
 ```
-User Input → LLM (frozen) → Response
-     ↓                          ↓
-  embed(input)            embed(output)
-     ↓                          ↓
-  ┌──────────────────────────────────────────┐
-  │           MEMORY LAYER (29 equations)    │
-  │                                          │
-  │  Phase 1: Core                           │
-  │    Eq 1-3: Strength / Value / Recall     │
-  │    Eq 4-5: Graph Edges + GNN Spreading   │
-  │    Eq 6-7: LSTM Gate + Graph Backprop    │
-  │                                          │
-  │  Phase 1.5: Advanced Recall              │
-  │    Eq 8: RNN Context Vector              │
-  │    Eq 9: Multi-Head Attention (5 heads)  │
-  │    Eq 10-11: Enhanced Gate + Adaptive    │
-  │                                          │
-  │  Phase 2: Cognitive Science              │
-  │    Eq 12: Prospect Theory Gating         │
-  │    Eq 13-14: Tension + Channels          │
-  │    Eq 15-17: Adaptive-k + ACT-R Decay   │
-  │                                          │
-  │  Phase 3: MemWire-Inspired               │
-  │    Eq 18: ResNet Displacement Edges      │
-  │    Eq 19: BM25 Sparse Lexical Recall     │
-  │    Eq 20: JK-Net Multi-Scale Activation  │
-  │    Eq 21: GAT Query-Aware Spreading      │
-  └──────────────────────────────────────────┘
+User Input --> LLM (frozen) --> Response
+     |                              |
+  embed(input)                embed(output)
+     |                              |
+  +------------------------------------------+
+  |        MEMORY LAYER (29 equations)       |
+  |                                          |
+  |  Phase 1: Core                           |
+  |    Eq 1-3: Strength / Value / Recall     |
+  |    Eq 4-5: Graph Edges + GNN Spreading   |
+  |    Eq 6-7: LSTM Gate + Graph Backprop    |
+  |                                          |
+  |  Phase 1.5: Advanced Recall              |
+  |    Eq 8: RNN Context Vector              |
+  |    Eq 9: Multi-Head Recall               |
+  |    Eq 10-11: Enhanced Gate + Adaptive    |
+  |                                          |
+  |  Phase 2: Cognitive Science              |
+  |    Eq 12: Prospect Theory Gating         |
+  |    Eq 13-14: Tension + Channels          |
+  |    Eq 15-17: Adaptive-k + ACT-R Decay    |
+  |                                          |
+  |  Phase 3: Retrieval                      |
+  |    Eq 18: ResNet Displacement Edges      |
+  |    Eq 19: BM25 Sparse Lexical Recall     |
+  |    Eq 20: JK-Net Multi-Scale Activation  |
+  |    Eq 21: GAT Query-Aware Spreading      |
+  +------------------------------------------+
 ```
+
+Recall (the query path) blocks the LLM call. The update path (right side) runs
+in a background thread after the response.
 
 ## Project Structure
 
 ```
 itm/
-  config.py          — All hyperparameters (29 equations worth)
-  core.py            — MemoryEntry + MemoryLayer + SparseIndex
-  graph.py           — MemoryGraph (GNN edges + spreading activation)
-  hierarchy.py       — L1/L2/L3 consolidation + hierarchical recall
-  embeddings.py      — BGE-M3 local embeddings (on-device, free)
-  embeddings_api.py  — Optional alternate backends (Nomic, OpenAI, Cohere)
-  storage.py         — Save/load to disk (.npz + .json)
-  patch.py           — Transparent OpenAI client adapter
-  formatting.py      — Memory display + prompt formatting
-  stats.py           — CLI statistics and graph search
+  config.py          - All hyperparameters (29 equations worth)
+  core.py            - MemoryEntry + MemoryLayer + SparseIndex
+  graph.py           - MemoryGraph (GNN edges + spreading activation)
+  hierarchy.py       - L1/L2/L3 consolidation + hierarchical recall
+  embeddings.py      - BGE-M3 local embeddings (on-device)
+  embeddings_api.py  - Optional alternate backends (Nomic, OpenAI, Cohere; paid)
+  storage.py         - Save/load to disk (.npz + .json)
+  patch.py           - Transparent OpenAI client adapter
+  formatting.py      - Memory display + prompt formatting
+  stats.py           - CLI statistics and graph search
 
-tests/               — 197 tests across 9 test files
-gpt.py               — Interactive chat demo with full memory
-test_gpt.py          — Real-BGE-M3 integration test (not run in CI)
+tests/               - 197 tests across the suite (offline FakeEmbedder)
+benchmarks/          - LOCOMO evaluation harness and results (see its README)
+gpt.py               - Interactive chat demo with full memory
+test_gpt.py          - Real-BGE-M3 integration smoke test (not run in CI)
 ```
 
 ---
 
-## Performance
+## Results
 
-- **197 tests passing** across unit and integration suites
-- **10/11 recall accuracy** on personal fact retrieval (integration test)
-- **Zero LLM calls** for all memory operations
-- **Background processing** — memory updates run in thread pool, zero added latency
-- **On-device embeddings** — BGE-M3 via sentence-transformers, no API costs
+Full LOCOMO benchmark (ACL 2024), 10 conversations, 1986 questions.
+Answer model and judge model: `gpt-4.1-nano`. Embeddings: BGE-M3. `top_k=5`,
+`n_hops=2`. Single seed, no error bars. Numbers below are reproduced directly
+from the per-question result files in `benchmarks/results/` and consolidated
+in `benchmarks/results/ablation_summary.json`.
 
----
+The ablation toggles two memory behaviors, both default OFF:
 
-## vs. The Market
+- A = `transcript_ingest`. Store each dialogue turn as unit-strength evidence.
+  Without it, the chat-tuned input gate filtered the large majority of
+  transcript turns, so gold evidence was almost never stored (gold-in-top5
+  5.3% at baseline vs 65.6% with both flags; about 588 memories per
+  conversation once the flag is on).
+- B = `spreading_debias_enabled`. Suppress the non-discriminative
+  ingestion-recency activation floor and apply symmetric GCN normalization to
+  graph spreading.
 
-| System | Approach | LLM Calls for Memory | Learning | Multi-Hop |
-|--------|----------|---------------------|----------|-----------|
-| **ITM** | 29 equations, pure math | 0 | Continuous (Hebbian) | GNN + GAT |
-| mem0 | LLM extracts + classifies | 2-3 per interaction | None (static store) | None |
-| RAG | Chunk + embed + retrieve | 0 (but no learning) | None | None |
-| Advanced RAG | Rerank + hybrid search | 1+ for reranking | None | Limited |
-| MemGPT | LLM manages own memory | 3-5 per interaction | LLM-simulated | LLM-simulated |
-| Zep | Summary + entity extraction | 1-2 per interaction | None | Graph (LLM-built) |
-| LangChain Memory | Buffer/summary/entity | 1-2 for summary | None | None |
+### Answerable questions (LOCOMO cats 1-4, n=1540)
 
-**ITM's differentiator**: It's the only system where memory operations are *learned behaviors* governed by mathematical equations, not LLM-orchestrated storage operations.
+| Metric | baseline (A0B0) | +A (A1B0) | +A+B (A1B1) |
+|---|---|---|---|
+| Judge accuracy | 3.57% | 19.74% | 30.58% |
+| Token-F1 | 0.043 | 0.188 | 0.280 |
+| Refusal rate | 86.9% | 51.4% | 33.4% |
+| Gold evidence in top-5 | 5.3% | 41.3% | 65.6% |
+| Judge accuracy when gold IS in context | 33.3% | 34.9% | 37.6% |
 
----
+### Per-category judge accuracy
 
-## Research
+| Category | baseline | +A | +A+B |
+|---|---|---|---|
+| Multi-hop (cat 1) | 4.6% | 10.6% | 20.2% |
+| Temporal (cat 2) | 1.9% | 13.7% | 21.5% |
+| Open-domain (cat 3) | 1.0% | 1.0% | 10.4% |
+| Single-hop (cat 4) | 4.2% | 27.2% | 39.8% |
+| Adversarial (cat 5) | 98.0% | 89.7% | 85.7% |
 
-The theoretical foundations span 70 years of neural network history — from
-Rosenblatt's Perceptron (1958) to Graph Attention Networks (2018) — with each
-equation mapped to its neural-network origin. See the equation tables above for
-the full mapping.
+Overall judge accuracy including the adversarial category: 24.8% -> 35.5% ->
+43.0%.
+
+### Robustness
+
+- Refusal-hardened re-scoring. If a refusal ("Not mentioned") on an answerable
+  question is forced to a wrong score before averaging, the slope holds:
+  3.51% -> 19.74% -> 30.58%. (The two numbers are nearly identical because the
+  judge already marks a refusal on an answerable question as wrong.)
+- Independent judge. A paired 200-question stratified subsample (the two
+  conversations present in all three result files) was re-graded with
+  `gpt-4.1-mini` on the same stored predictions, no regeneration. The
+  improvement direction is preserved (baseline < +A+B). On this small slice the
+  mini judge is more lenient on the baseline -- it credits some
+  refusal-adjacent predictions -- so its slope is flatter, and nano-vs-mini
+  agreement is 0.745 across the judged pairs. See
+  `benchmarks/results/rejudge_mini_subsample.json`.
+
+### Honest ceiling and limitations
+
+- The answer model is the bottleneck, not retrieval. Even with gold evidence
+  in the top-5 context, `gpt-4.1-nano` answers correctly only ~37.6% of the
+  time. ITM's contribution is "get the right evidence in front of the model"
+  (gold-in-top5 rose from 5.3% to 65.6%); it does not make the model reason
+  better.
+- Open-domain (cat 3, 10.4%) is the weakest category, followed by multi-hop
+  (cat 1, 20.2%).
+- Better recall costs a few points of appropriate abstention on adversarial
+  trap questions (cat 5: 98.0% -> 85.7%). Storing more evidence makes the model
+  more willing to answer, including when it should refuse.
+- `top_k=5` is a lower bound; larger k was not swept.
+- Single seed, no error bars. These are relative-improvement / ablation
+  results, not SOTA-competitive absolute accuracy.
+
+### Relation to other systems
+
+Published LOCOMO numbers for retrieval/memory systems such as RAG variants,
+mem0, MemGPT, and Zep are typically in the 60-75% range, but under different
+answer models, prompts, retrieval budgets, and scoring. This repo contains no
+head-to-head measurement against those systems, and ITM's absolute accuracy
+here (30.58% on answerable) is well below them. ITM's claim is narrow and
+internal: an ablation showing that two memory behaviors raise gold-evidence
+retrieval and answerable accuracy by a large relative factor, with all memory
+operations done in numpy and no LLM calls.
+
+Reproduce everything in [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 
@@ -263,14 +368,30 @@ the full mapping.
 ```bash
 # All unit tests (197 tests, offline, deterministic FakeEmbedder)
 pip install -e .[dev]
-python -m pytest tests/ -v
+python -m pytest -q tests
 
-# Integration test with real BGE-M3 embeddings (downloads model, needs network)
+# Integration smoke test with real BGE-M3 embeddings
+# (downloads the model, needs network; illustrative, not a benchmark)
 python test_gpt.py
 ```
+
+`test_gpt.py` is an end-to-end smoke test on a small hand-written set of facts
+with simulated responses. It exercises the pipeline; it is not a benchmark and
+its pass count is not an accuracy claim. The accuracy numbers are in
+[Results](#results).
+
+---
+
+## Research
+
+The theoretical foundations span neural network history -- from Rosenblatt's
+Perceptron (1958) to Graph Attention Networks (2018) -- with each equation
+mapped to its origin in the tables above (ACT-R power-law decay, prospect
+theory weighting, BM25 sparse retrieval, GNN/GAT spreading, ResNet residual
+edges).
 
 ---
 
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2026 Harshal More.
+[MIT](LICENSE).

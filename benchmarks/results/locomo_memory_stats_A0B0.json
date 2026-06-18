@@ -1,0 +1,51 @@
+{
+  "mode": "full_pipeline",
+  "model": "gpt-4.1-nano",
+  "judge_model": "gpt-4.1-nano",
+  "config": "baseline A0B0 (ITM_TRANSCRIPT_INGEST=0 ITM_DEBIAS=0)",
+  "n_questions": 1986,
+  "overall_f1": 0.2542,
+  "overall_judge": 0.2477,
+  "answerable": {
+    "count": 1540,
+    "f1": 0.0428,
+    "judge": 0.0357,
+    "gold_present_pct": 5.3,
+    "judge_when_gold_present": 0.3333,
+    "judge_when_gold_absent": 0.0192,
+    "refusal_rate_pct": 86.9
+  },
+  "refusal_rate_overall_pct": 89.5,
+  "by_category": {
+    "1": {
+      "count": 282,
+      "f1": 0.0435,
+      "judge": 0.0461,
+      "avg_recalled": 5.0
+    },
+    "2": {
+      "count": 321,
+      "f1": 0.0313,
+      "judge": 0.0187,
+      "avg_recalled": 5.0
+    },
+    "3": {
+      "count": 96,
+      "f1": 0.0276,
+      "judge": 0.0104,
+      "avg_recalled": 5.0
+    },
+    "4": {
+      "count": 841,
+      "f1": 0.0487,
+      "judge": 0.0416,
+      "avg_recalled": 5.0
+    },
+    "5": {
+      "count": 446,
+      "f1": 0.9843,
+      "judge": 0.9798,
+      "avg_recalled": 5.0
+    }
+  }
+}
