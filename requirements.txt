@@ -1,0 +1,3 @@
+# Dependencies are declared in pyproject.toml (single source of truth).
+# Install the package in editable mode to pull in runtime deps:
+-e .

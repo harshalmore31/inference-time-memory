@@ -1,0 +1,9 @@
+{
+  "project_id": "proj-fef3524674ee19f9",
+  "repo_key": "git-initial:7ca528ce2e5651c1491cb5fc60c2b390d52802fb",
+  "archetype": "ai-native-team",
+  "intent": "hardening",
+  "prefix": "LAM",
+  "phase": "codebase-audit",
+  "lead": "codebase-auditor"
+}

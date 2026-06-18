@@ -1,0 +1,49 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Pytest
+.pytest_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data files (generated at runtime)
+memory_data/
+
+# PDFs
+*.pdf
+
+# Research (internal notes, not part of the library)
+/research/
+research.md
+
+# Benchmarks (generated)
+benchmarks/
+
+# AI tool configs
+CLAUDE.md
+GEMINI.md
+
+# Claude Code
+.claude/

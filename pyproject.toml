@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inference-time-memory"
+version = "0.1.0"
+description = "A neural memory layer for continuous learning in frozen language models — 29 equations, zero LLM calls for memory operations."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Harshal More" }]
+keywords = ["llm", "memory", "agents", "neural-network", "embeddings", "retrieval"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "openai>=2.21",
+    "numpy>=1.26",
+    "sentence-transformers>=5.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "cohere>=5.0",
+    "einops>=0.8",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "black>=24",
+    "mypy>=1.11",
+]
+
+[tool.setuptools]
+packages = ["itm"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",  # line length is enforced by black, not ruff
+    "E402",  # module import after code (intentional load_dotenv() in scripts)
+    "F841",  # unused local (some are deferred dead-code, e.g. Eq 24; logic phase)
+    "B007",  # unused loop variable (renaming touches logic lines; deferred)
+    "B008",  # function calls in argument defaults (used intentionally)
+    "B905",  # zip() without strict= (logic change deferred)
+]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = false
