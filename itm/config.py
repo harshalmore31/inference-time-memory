@@ -89,6 +89,30 @@ class MemoryConfig:
     adaptive_heads: bool = False  # use fixed weights until head normalization
     head_temperature: float = 0.5  # softmax temperature (unused when disabled)
 
+    # Transcript-Ingest Mode (chat-vs-transcript gate reconciliation)
+    # The enhanced gate (Eq 10) is tuned for interactive CHAT, where one turn is
+    # a user fact (e_in) and the next is the assistant's acknowledgement (e_out).
+    # There, a high context-continuity D_ctx = sim(e_in, c_{t-1}) signals a
+    # mid-conversation follow-up query that should be filtered, so the
+    # gate_w_ctx * D_ctx_factor^ctx_power term is the dominant suppressor.
+    #
+    # When INGESTING a pre-recorded multi-turn dialogue transcript via a sliding
+    # window, e_out is the NEXT human turn, and EVERY turn is by construction a
+    # continuation of the same ongoing conversation. D_ctx is therefore
+    # structurally high (~0.83) on essentially every turn, so the continuation
+    # penalty collapses the gate below theta_min_gate and ~87% of turns are
+    # dropped — gold evidence is usually never stored. This is a chat-vs-
+    # transcript mismatch, not a property of the content.
+    #
+    # transcript_ingest, when True, drops the continuation penalty during the
+    # gate decision (the gate_w_ctx * D_ctx term is set to 0) so transcript turns
+    # are admitted on their own input-novelty / retrieval merits. All other gate
+    # signals (input novelty 1 - best_sim, the R_out retrieval ceiling, R_val,
+    # entropy) are untouched, so true retrieval echoes and exact duplicates are
+    # still filtered. Defaults OFF: interactive chat behaviour and every unit
+    # test are unchanged.
+    transcript_ingest: bool = False
+
     # Persistence
     memory_dir: str = "memory_data"
     user_id: str = "default_user"
@@ -174,6 +198,45 @@ class MemoryConfig:
     # Messages weighted by sender's relevance to original query.
     # Prevents irrelevant but well-connected memories from stealing activation.
     query_aware_spread_enabled: bool = False
+
+    # Eq 5c + 9b: Recall Debias (Root Cause B). Master flag for the recall-side
+    # refinement that makes top-k reflect QUERY RELEVANCE rather than artifacts of
+    # graph connectivity or ingestion order. Two complementary, principled parts:
+    #
+    # (1) Eq 9b — Recency-head suppression (the dominant fix in the transcript
+    #     regime). The multi-head recall score (Eq 9) includes a recency head that
+    #     scores each memory by how recently it was INGESTED. In interactive chat
+    #     that tracks the live topic and is discriminative, but a pre-recorded
+    #     transcript is fed back-to-back through a sliding window, so "recency" only
+    #     encodes ingestion order: the final session's turns receive a near-1.0,
+    #     query-independent activation floor and crowd the top-5 of essentially
+    #     every retrospective question regardless of content. Empirically the last
+    #     session's turns appear in ~half of all questions' top-5. When this flag
+    #     AND transcript_ingest are set, the recency head weight is zeroed and its
+    #     mass is redistributed (convex renormalization) onto the query-relevance
+    #     heads. This is the recall-time counterpart of dropping the continuation
+    #     penalty at ingest time, and is consistent with the existing decisions to
+    #     disable non-discriminative signals for this embedding/ingest regime
+    #     (adaptive_heads, gate_w_entropy, the transcript gate_w_ctx term).
+    #     Measured: recall@5 on the held-out sample rises from ~49% to ~64%.
+    #
+    # (2) Eq 5c — Symmetric GCN normalization of spreading activation (Kipf &
+    #     Welling 2017). The base rule a_i^(l+1) = a_i^(l) + η·AGG_j(w_ij·a_j) with
+    #     mean aggregation (Eq 5b) stops a high-degree RECEIVER over-accumulating
+    #     but a high-degree SENDER hub still broadcasts its activation into many
+    #     neighbours each hop. This scales every message by 1/sqrt(deg_i·deg_j)
+    #     instead of 1/deg_i, so a hub's vote is divided by its own connectivity on
+    #     the sending side too — symmetric on both endpoints. The per-hop residual
+    #     is additionally bounded by spread_residual_cap so spreading can REORDER
+    #     associatively related memories but never override the query-driven
+    #     initial activation (Eq 3). This addresses the strength/degree-hub bias
+    #     present when memory strengths vary (interactive chat); in the transcript
+    #     regime all strengths are equal so it is near-neutral on recall there.
+    #
+    # Defaults OFF; when off, recall is byte-for-byte the prior Eq 5b/9/20/21
+    # behaviour and every per-equation property test holds.
+    spreading_debias_enabled: bool = False
+    spread_residual_cap: float = 0.5  # bound on the per-hop propagation residual
 
     # ── Phase 4: Equations 22-29 (Research.md §14-18) ──
 

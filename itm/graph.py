@@ -149,10 +149,21 @@ class MemoryGraph:
         query_embedding: np.ndarray | None = None,
         keys: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Equations 5b + 20 + 21: Enhanced GNN message passing.
+        """Equations 5b + 20 + 21 (+ optional 5c debias): GNN message passing.
 
         Base (Eq 5b, GCN):
             a_i^(l+1) = a_i^(l) + η · (1/|N(i)|) · Σ_j(w_ij · a_j^(l))
+
+        Eq 5c (debias, GCN symmetric norm — Kipf & Welling 2017): when
+        spreading_debias_enabled, the mean aggregation 1/|N(i)| is replaced by the
+        symmetric normalizer 1/sqrt(deg_i·deg_j) applied per edge, and the per-hop
+        residual is bounded by spread_residual_cap:
+            a_i^(l+1) = a_i^(l) + η · clip(Σ_j w_ij·a_j / sqrt(deg_i·deg_j),
+                                           ±spread_residual_cap·a_i^(0)_scale)
+        The 1/sqrt(deg_j) factor divides a high-degree SENDER hub's broadcast by its
+        own connectivity, so a generic memory wired to many turns can no longer
+        inject a query-independent activation floor into the top-5. The cap keeps
+        spreading subordinate to the query-driven initial activation (Eq 3).
 
         Eq 20 (JK-Net, Xu 2018): Multi-scale — combine activations from
         ALL depths, not just final. Local (1-hop) + global (4-hop).
@@ -199,6 +210,18 @@ class MemoryGraph:
         n = len(activations)
         eta = self.config.eta_propagation
 
+        # Eq 5c: precompute sqrt-degree for symmetric GCN normalization.
+        debias = self.config.spreading_debias_enabled
+        if debias:
+            sqrt_deg = np.array(
+                [np.sqrt(max(len(self.edges.get(i, {})), 1)) for i in range(n)],
+                dtype=np.float64,
+            )
+            # Cap on the per-hop residual, scaled by the initial activation range
+            # so spreading can reorder but not override query relevance (Eq 3).
+            init_scale = float(np.max(np.abs(initial_activations))) if n else 0.0
+            residual_cap = self.config.spread_residual_cap * max(init_scale, 1e-12)
+
         # Eq 20: collect activations at each scale
         if multiscale:
             scale_activations = [activations.copy()]
@@ -227,10 +250,20 @@ class MemoryGraph:
                             msg = weight * activations[j] * q_key_sims[j]
                         else:
                             msg = weight * activations[j]
+                        # Eq 5c: symmetric per-edge normalization 1/sqrt(d_i·d_j)
+                        if debias:
+                            msg /= sqrt_deg[i] * sqrt_deg[j]
                         neighbor_sum += msg
                         neighbor_count += 1
                 if neighbor_count > 0:
-                    delta[i] = neighbor_sum / neighbor_count
+                    if debias:
+                        # Eq 5c: sum already symmetric-normalized; bound residual.
+                        delta[i] = float(
+                            np.clip(neighbor_sum, -residual_cap, residual_cap)
+                        )
+                    else:
+                        # Eq 5b: mean aggregation (1/|N(i)|).
+                        delta[i] = neighbor_sum / neighbor_count
 
             activations = activations + eta_l * delta
 

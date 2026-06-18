@@ -440,6 +440,22 @@ class MemoryLayer:
                 if self.config.sparse_recall_enabled
                 else 0.0
             )
+            # Eq 9b (recency debias, Root Cause B): drop the recency head when
+            # ingesting a fixed transcript. The recency head (head 4) scores a
+            # memory by how recently it was INGESTED. In interactive chat that
+            # tracks "what we are discussing now" and is discriminative, but a
+            # pre-recorded transcript is fed back-to-back via a sliding window,
+            # so "recency" only encodes ingestion order — the final session's
+            # turns get a near-1.0 query-independent floor and crowd the top-5 of
+            # essentially every retrospective question (e.g. ~half of questions
+            # surface last-session turns regardless of content). Zeroing w4 here
+            # is the recall-time counterpart of dropping the continuation penalty
+            # at ingest time (transcript_ingest), and the convex renormalization
+            # below redistributes its mass proportionally onto the discriminative
+            # query-relevance heads. Gated on both flags so chat recall and every
+            # property test are unchanged.
+            if self.config.spreading_debias_enabled and self.config.transcript_ingest:
+                w4 = 0.0
             # Equation 9 is a convex combination: head weights must sum to 1.0.
             # The base four heads already sum to 1.0, so enabling the sparse head
             # (recall_w_sparse) would push the total to 1.15. Renormalize so the
@@ -1043,6 +1059,14 @@ class MemoryLayer:
         the output's attention is over stored keys. High entropy = output
         synthesizes many memories (query). Low entropy = generic/focused (fact).
 
+        Transcript-ingest mode: when config.transcript_ingest is True the
+        continuation penalty (gate_w_ctx * D_ctx_factor) is dropped. In a
+        sliding-window transcript ingest, e_out is the next human turn and every
+        turn continues the same conversation, so D_ctx is structurally high on
+        all turns and the continuation term — which is meant to suppress
+        mid-chat follow-up queries — wrongly filters genuine evidence. All other
+        gate signals are unchanged. Default OFF leaves chat behaviour intact.
+
         Backward-compatible: when best_sim is None, falls back to R_overlap
         as primary (original Equation 6 behavior).
         """
@@ -1051,8 +1075,12 @@ class MemoryLayer:
         # get disproportionately larger penalties than weak ones. This separates
         # mid-conversation queries (D_ctx ≈ 0.75+) from topic-transition facts
         # (D_ctx ≈ 0.65) more decisively than linear scaling.
+        # In transcript-ingest mode every turn is a continuation by construction,
+        # so this signal is non-discriminative and the penalty is disabled.
         theta_ctx = self.config.theta_ctx_gate
-        if D_ctx > theta_ctx:
+        if self.config.transcript_ingest:
+            D_ctx_factor = 0.0
+        elif D_ctx > theta_ctx:
             D_ctx_factor = (D_ctx - theta_ctx) / (1.0 - theta_ctx + 1e-8)
             D_ctx_factor = min(D_ctx_factor, 1.0)
             D_ctx_factor = (
@@ -1101,13 +1129,53 @@ class MemoryLayer:
         2. Apply global decay to all memories
         3. Compute context continuity BEFORE updating context (Equation 10)
         4. Update context vector (Equation 8)
-        5. Find best matching memory
-        6. Soft decision (Eq 25-27) or hard threshold → strengthen or create
-        7. Cold start boost (Eq 28) on alpha and initial strength
-        8. Multi-channel contradiction (Eq 24) if enabled
-        9. Hierarchy consolidation (Eq 22) if triggered
+        5. Transcript-ingest fast path (config.transcript_ingest): store every
+           turn as its own memory, bypassing the chat create-vs-strengthen merge
+           and the suppression gate (still runs contradiction detection). Off by
+           default. See config.transcript_ingest for the chat-vs-transcript
+           rationale.
+        6. Find best matching memory
+        7. Soft decision (Eq 25-27) or hard threshold → strengthen or create
+        8. Cold start boost (Eq 28) on alpha and initial strength
+        9. Multi-channel contradiction (Eq 24) if enabled
+        10. Hierarchy consolidation (Eq 22) if triggered
         """
         self.timestep += 1
+
+        # ── Transcript-Ingest Mode (chat-vs-transcript gate reconciliation) ──
+        # The suppression gate (Eq 10), the create-vs-strengthen merge and the
+        # per-turn strength dynamics (decay Eq 1, cold start Eq 28) are CHAT
+        # heuristics: in interactive chat an assistant acknowledgement / mid-chat
+        # follow-up query is filtered, a re-stated fact is merged, and strength
+        # tracks how often a fact is reinforced over time. A pre-recorded
+        # dialogue transcript is instead a fixed corpus of DISTINCT evidence
+        # turns of equal a priori importance, fed via a sliding window where the
+        # next human turn is e_out. Under that window every turn is a
+        # continuation (D_ctx ~ 0.83) and adjacent turns are mutually similar
+        # (best_sim high), so the chat gate's continuation penalty and its
+        # 1 - best_sim novelty term both collapse and ~87% of turns are dropped —
+        # gold evidence is rarely stored. When transcript_ingest is set, each
+        # turn is stored as its own unit-strength memory and no global decay is
+        # applied, so retrieval ranks turns purely on query relevance (matching
+        # the verified store-all baseline). The chat-only context vector (Eq 8),
+        # whose job is to resolve fragment queries mid-conversation, is NOT built
+        # during ingest, so it cannot blur the live recall query afterwards.
+        # Off by default — the interactive chat path below is untouched.
+        if self.config.transcript_ingest:
+            new_idx = len(self.memories)
+            self._create_memory(
+                input_embedding,
+                output_embedding,
+                input_text,
+                output_text,
+                initial_strength=self.config.initial_strength,
+            )
+            return {
+                "action": "created",
+                "index": new_idx,
+                "details": "transcript_ingest",
+            }
+
         self._apply_global_decay()
 
         # Equation 10: compute context continuity BEFORE updating context
