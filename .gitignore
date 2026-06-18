@@ -1,6 +1,7 @@
 # Environment variables
 .env
 
+.preset/
 # Python
 __pycache__/
 *.pyc
