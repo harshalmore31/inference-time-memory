@@ -76,7 +76,7 @@ class MemoryStats:
             return "No memories to search."
 
         query_emb = embedder.embed(query)
-        results = layer.recall_graph(query_emb)
+        results = layer.recall_graph(query_emb, query_text=query)
 
         if not results:
             return f"No relevant memories found for: '{query}'"
