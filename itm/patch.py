@@ -20,8 +20,11 @@ Performance:
 
 from __future__ import annotations
 
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+logger = logging.getLogger("itm.patch")
 
 from itm.config import MemoryConfig
 from itm.core import MemoryLayer
@@ -43,6 +46,9 @@ class MemoryState:
         self.stats = MemoryStats()
         self._last_action: dict | None = None
         self._last_recalled: list | None = None  # Eq 16: for feedback loop
+        self._original_create = None  # stash for disable_memory restore
+        self._patched_client = None  # the client this state patched
+        self._last_persist_error: Exception | None = None  # set on bg save failure
 
         # Background thread pool for post-response processing
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="memory")
@@ -122,6 +128,13 @@ def _background_update(
                 state.layer.apply_feedback(output_emb, state._last_recalled)
 
             state.storage.save(state.layer)
+    except Exception as exc:  # noqa: BLE001 — surface, do not swallow
+        # A background save/update failure (disk full, permissions) would
+        # otherwise be absorbed by the executor future and the user would
+        # believe memory persisted. Log it and flag it on the state instead.
+        with state._lock:
+            state._last_persist_error = exc
+        logger.exception("Background memory update failed: %s", exc)
     finally:
         done.set()
         with state._lock:
@@ -148,6 +161,9 @@ def enable_memory(client, config: MemoryConfig | None = None) -> MemoryState:
     state = MemoryState(config)
 
     original_create = client.responses.create
+    # Stash the original so disable_memory() can restore the exact callable.
+    state._original_create = original_create
+    state._patched_client = client
 
     def patched_create(*args, **kwargs):
         user_input = _extract_input(kwargs)
@@ -207,11 +223,27 @@ def enable_memory(client, config: MemoryConfig | None = None) -> MemoryState:
 
         return response
 
+    # Tag the wrapper so disable_memory can find the originating state and the
+    # original callable (functools.wraps does not run here, so __wrapped__ would
+    # never be set — we attach an explicit reference instead).
+    patched_create._memory_state = state
     client.responses.create = patched_create
     return state
 
 
 def disable_memory(client):
-    """Remove the memory patch, restoring original behavior."""
-    if hasattr(client.responses.create, "__wrapped__"):
-        client.responses.create = client.responses.create.__wrapped__
+    """Remove the memory patch, restoring the original create callable.
+
+    Restores client.responses.create to the exact callable captured at
+    enable_memory time and shuts down the background executor. No-op if the
+    client was never patched.
+    """
+    current = getattr(client.responses, "create", None)
+    state = getattr(current, "_memory_state", None)
+    if state is None or state._original_create is None:
+        return False
+    client.responses.create = state._original_create
+    state._original_create = None
+    state._patched_client = None
+    state.shutdown()
+    return True

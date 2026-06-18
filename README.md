@@ -4,7 +4,7 @@
 
 **29 equations. Zero LLM calls for memory ops. Pure math.**
 
-[![Tests](https://img.shields.io/badge/Tests-179_passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-197_passing-brightgreen.svg)]()
 [![Equations](https://img.shields.io/badge/Equations-29-blue.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -46,7 +46,8 @@ Every behavior in ITM is mathematically defined. No heuristics, no LLM classific
 | # | Name | Equation | Neural Network Origin |
 |---|------|----------|----------------------|
 | 1 | Strength Update | `s_i(t+1) = s_i·γ + α·sim(e_in, k_i)` | Perceptron weight update (1958) |
-| 2 | Value Drift | `v_i(t+1) = v_i + b_i·(e_out_new - v_i)` | Gradient descent / bias adaptation |
+| 2 | Value Drift (hard) | `v_i(t+1) = normalize(v_i + b_i·(e_out_new - v_i))` | Gradient descent / bias adaptation |
+| 2b | Value Drift (soft) | `v_i(t+1) = normalize(v_i + b_i·(1 - sim(v_i,e_out))·(e_out - v_i))` | Soft-drift counterpart to Eq 2 (similarity-gated) |
 | 3 | Recall | `R(q) = Σ(s_i·sim(q,k_i)·v_i) / Σ(s_i·sim)` | Weighted retrieval |
 | 4 | Association Edge | `w_ij = (α_k·sim_k + α_v·sim_v)·exp(-\|Δt\|/τ)` | Hebbian learning (1949) |
 | 5 | Spreading Activation | `a_i^(l+1) = a_i^(l) + η·Σ_j(w_ij·a_j^(l))` | GNN message passing (2017) |
@@ -77,7 +78,7 @@ Every behavior in ITM is mathematically defined. No heuristics, no LLM classific
 
 | # | Name | Equation | Neural Network Origin |
 |---|------|----------|----------------------|
-| 18 | Displacement Edges | `d_i = normalize(v_i - k_i)`, added to Eq 4 | ResNet residual connections (2015) |
+| 18 | Displacement Edges | `d_i = normalize(v_i - k_i)`; α_k,α_v,α_d renormalized into Eq 4 (convex) | ResNet residual connections (2015) |
 | 19 | Sparse Lexical Recall | TF-IDF sparse vectors + BM25 scoring | BM25 (Robertson 1994) |
 | 20 | Multi-Scale Activation | `a_final = Σ_l(w_l·a^(l))` with per-hop damping | JK-Net (Xu et al. 2018) |
 | 21 | Query-Aware Spreading | `msg_ij = w_ij·a_j·sim(q, k_j)` | GAT attention (Veličković 2018) |
@@ -215,7 +216,7 @@ itm/
   formatting.py      — Memory display + prompt formatting
   stats.py           — CLI statistics and graph search
 
-tests/               — 179 tests across 7 test files
+tests/               — 197 tests across 9 test files
 gpt.py               — Interactive chat demo with full memory
 test_gpt.py          — Real-BGE-M3 integration test (not run in CI)
 ```
@@ -224,7 +225,7 @@ test_gpt.py          — Real-BGE-M3 integration test (not run in CI)
 
 ## Performance
 
-- **179 tests passing** across unit and integration suites
+- **197 tests passing** across unit and integration suites
 - **10/11 recall accuracy** on personal fact retrieval (integration test)
 - **Zero LLM calls** for all memory operations
 - **Background processing** — memory updates run in thread pool, zero added latency
@@ -260,7 +261,7 @@ the full mapping.
 ## Running Tests
 
 ```bash
-# All unit tests (179 tests, offline, deterministic FakeEmbedder)
+# All unit tests (197 tests, offline, deterministic FakeEmbedder)
 pip install -e .[dev]
 python -m pytest tests/ -v
 

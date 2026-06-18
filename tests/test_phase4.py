@@ -333,6 +333,127 @@ class TestMultiChannelContradiction:
         )
         assert sim > 0.9
 
+    @staticmethod
+    def _disp_sim(value, key, new_output, new_input):
+        """Recompute Eq 24 displacement channel exactly as core.py does:
+        disp = sim(normalize(value - key), normalize(new_output - new_input)).
+        """
+        d_old = value - key
+        d_old = d_old / np.linalg.norm(d_old)
+        d_new = new_output - new_input
+        d_new = d_new / np.linalg.norm(d_new)
+        return float(EmbeddingService.cosine_similarity(d_old, d_new))
+
+    def test_decision_equals_weighted_score_vs_threshold(self):
+        """Eq 24: decision == (w_t·topic + w_d·disp + w_c·ctx < theta_multichannel).
+
+        Mutation-hardened. Two cases differ in ONE channel only (context). The
+        threshold is placed strictly between the two scores so that toggling the
+        context channel FLIPS the code's returned decision. Asserting the code's
+        booleans against the published formula — and that result_a != result_b —
+        binds every term:
+          * dropping the context channel breaks the flip (M1 caught),
+          * swapping w_t<->w_d moves Case A past theta (M2 caught),
+          * flipping `<` to `>=` inverts both booleans (M3 caught),
+          * dropping the displacement channel shifts both scores (M4 caught).
+        Per-channel similarities are derived from the actual vectors with the
+        same formulas core.py uses (no geometrically-wrong magic numbers).
+        """
+        config = _cfg(
+            multichannel_enabled=True,
+            embedding_dim=4,
+            theta_key=0.7,
+            w_channel_topic=0.5,
+            w_channel_disp=0.3,
+            w_channel_ctx=0.2,
+            # Placed strictly between sim_mc_b (~0.263, ctx orthogonal) and
+            # sim_mc_a (~0.463, ctx aligned) so the context toggle flips the
+            # decision: A is no-contradiction, B is contradiction.
+            theta_multichannel=0.35,
+        )
+        embedder = FakeEmbedder(config)
+        layer = MemoryLayer(config, embedder)
+
+        e0 = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        e1 = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        # Opposing-stance setup: d_old points along value-key, d_new along
+        # new_output-new_input, in roughly opposite directions (disp_sim < 0).
+        key = e1.copy()
+        value = (e1 + e0).astype(np.float32)
+        value /= np.linalg.norm(value)
+        new_input = e1.copy()
+        new_output = (e1 - e0).astype(np.float32)
+        new_output /= np.linalg.norm(new_output)
+
+        ctx_creation = e0.copy()
+        mem = MemoryEntry(
+            key=key,
+            value=value,
+            strength=1.0,
+            bias=0.5,
+            timestamp=1,
+            context_at_creation=ctx_creation.copy(),
+        )
+
+        topic_sim = 0.95  # passed-in key_sim (subject matches, gate passes)
+        # Displacement channel: exact value the code computes (~-0.707, NOT -1).
+        disp_sim = self._disp_sim(value, key, new_output, new_input)
+        w_t, w_d, w_c = (
+            config.w_channel_topic,
+            config.w_channel_disp,
+            config.w_channel_ctx,
+        )
+
+        # Case A: context aligned -> ctx_sim ≈ 1.0 -> sim_mc ABOVE theta.
+        layer.context_vector = e0.copy()
+        ctx_sim_a = float(EmbeddingService.cosine_similarity(e0, ctx_creation))
+        sim_mc_a = w_t * topic_sim + w_d * disp_sim + w_c * ctx_sim_a
+        expected_a = sim_mc_a < config.theta_multichannel
+        result_a = layer._multichannel_contradiction(
+            mem, new_output, new_input, key_sim=topic_sim
+        )
+        assert result_a == expected_a
+        assert result_a is False  # ctx aligned -> agreement high -> no contradiction
+
+        # Case B: ONLY the context channel changes (current context orthogonal to
+        # creation) -> ctx_sim ≈ 0.0 -> sim_mc drops BELOW theta.
+        layer.context_vector = e1.copy()
+        ctx_sim_b = float(EmbeddingService.cosine_similarity(e1, ctx_creation))
+        sim_mc_b = w_t * topic_sim + w_d * disp_sim + w_c * ctx_sim_b
+        expected_b = sim_mc_b < config.theta_multichannel
+        result_b = layer._multichannel_contradiction(
+            mem, new_output, new_input, key_sim=topic_sim
+        )
+        assert result_b == expected_b
+        assert result_b is True  # ctx mismatch -> agreement low -> contradiction
+
+        # The decision flipped on the CODE's output while only the context
+        # channel varied: the context channel is load-bearing inside core.py,
+        # not just inside this test's arithmetic.
+        assert result_a != result_b
+
+    def test_topic_gate_blocks_below_theta_key(self):
+        """Eq 24: topic below theta_key short-circuits to no contradiction."""
+        config = _cfg(multichannel_enabled=True, theta_key=0.7, theta_multichannel=0.9)
+        embedder = FakeEmbedder(config)
+        layer = MemoryLayer(config, embedder)
+        key = _rand_emb(8, seed=1)
+        mem = MemoryEntry(
+            key=key.copy(),
+            value=_rand_emb(8, seed=2),
+            strength=1.0,
+            bias=0.5,
+            timestamp=1,
+        )
+        # key_sim below theta_key -> always False regardless of other channels.
+        assert (
+            layer._multichannel_contradiction(
+                mem, _rand_emb(8, seed=3), _rand_emb(8, seed=4), key_sim=0.5
+            )
+            is False
+        )
+
 
 # ── Eq 25: Soft Create-vs-Strengthen ──
 

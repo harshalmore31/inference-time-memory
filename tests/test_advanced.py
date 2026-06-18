@@ -194,6 +194,84 @@ class TestMultiHeadRecall:
         assert len(results) >= 1
         assert results[0][0].input_text == "python programming"
 
+    def test_static_head_weights_are_convex_with_and_without_sparse(self):
+        """Eq 9: the static head weights are a convex combination (sum to 1.0).
+
+        The four base heads sum to 1.0. Enabling the sparse head (Eq 19,
+        recall_w_sparse=0.15) would naively push the total to 1.15, breaking the
+        documented convex combination. The code renormalizes, so the effective
+        weight vector must sum to 1.0 whether or not the sparse head is enabled.
+
+        We reconstruct the effective weights exactly as the static branch does,
+        then cross-check that _compute_multi_head_activations actually produces
+        the convex-weighted score for a single unit-strength memory.
+        """
+
+        def effective_weights(cfg):
+            w1 = cfg.recall_w_semantic
+            w2 = cfg.recall_w_answer
+            w3 = cfg.recall_w_context
+            w4 = cfg.recall_w_recency
+            w5 = cfg.recall_w_sparse if cfg.sparse_recall_enabled else 0.0
+            total = w1 + w2 + w3 + w4 + w5
+            return np.array([w1, w2, w3, w4, w5]) / total
+
+        cfg_no_sparse = MemoryConfig(
+            embedding_dim=64, adaptive_heads=False, sparse_recall_enabled=False
+        )
+        cfg_sparse = MemoryConfig(
+            embedding_dim=64,
+            adaptive_heads=False,
+            sparse_recall_enabled=True,
+            recall_w_sparse=0.15,
+        )
+
+        w_no_sparse = effective_weights(cfg_no_sparse)
+        w_sparse = effective_weights(cfg_sparse)
+
+        # Published invariant: convex combination, weights sum to 1.0 in both cases.
+        assert abs(w_no_sparse.sum() - 1.0) < 1e-9
+        assert abs(w_sparse.sum() - 1.0) < 1e-9
+        # The sparse case still carries a non-trivial sparse weight after renorm.
+        assert w_sparse[4] > 0.0
+
+        # Behavioral cross-check: a single unit-strength memory's activation must
+        # equal the convex-weighted sum of its head similarities (no sparse text).
+        layer = make_layer(cfg_sparse)
+        k = random_embedding(64, np.random.default_rng(7))
+        v = random_embedding(64, np.random.default_rng(8))
+        layer.timestep = 1
+        layer._create_memory(k.copy(), v.copy(), "fact", "answer")
+        layer.memories[0].strength = 1.0
+        layer.memories[0].timestamp = layer.timestep
+
+        q = random_embedding(64, np.random.default_rng(9))
+        # Heads, computed the same way as the implementation.
+        h1 = max(float(EmbeddingService.cosine_similarity(q, k)), 0.0)
+        h2 = max(float(EmbeddingService.cosine_similarity(q, v)), 0.0)
+        c = layer.context_vector
+        h3 = (
+            max(float(EmbeddingService.cosine_similarity(c, k)), 0.0)
+            if c is not None
+            else 0.0
+        )
+        h4 = float(
+            np.exp(
+                -(layer.timestep - layer.memories[0].timestamp) / cfg_sparse.tau_recall
+            )
+        )
+        h5 = 0.0  # empty query_text -> sparse head contributes nothing
+        expected = float(
+            w_sparse[0] * h1
+            + w_sparse[1] * h2
+            + w_sparse[2] * h3
+            + w_sparse[3] * h4
+            + w_sparse[4] * h5
+        )
+        acts = layer._compute_multi_head_activations(q, query_text="")
+        # strength == 1.0 -> compression factor 1**exp == 1, so act == convex sum.
+        assert abs(float(acts[0]) - expected) < 1e-6
+
     def test_recency_head_breaks_ties(self):
         """When semantic similarity is equal, recency should break the tie."""
         config = MemoryConfig(

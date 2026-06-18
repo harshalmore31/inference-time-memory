@@ -189,6 +189,53 @@ class TestContradiction:
         # Same value = no contradiction
         assert not layer._detect_contradiction(entry, value, 1.0)
 
+    def test_hard_contradiction_value_renormalized_to_unit(self):
+        """Eq 2: after the hard-contradiction blend the value is unit norm.
+
+        Property: ||v_i|| == 1.0 after a contradiction update. Without
+        renormalization, blending two unit vectors leaves norm ~0.707, which
+        makes contradicted values under-contribute in recall_weighted_value.
+        Driven through the real update() path so the code (not a hand blend)
+        performs the renormalization.
+        """
+        config = MemoryConfig(
+            embedding_dim=64,
+            theta_key=0.7,
+            theta_value=0.5,
+            theta_create=0.8,
+            initial_bias=0.5,
+        )
+        layer = make_layer(config)
+
+        # Key the new input will match (sim = 1.0 > theta_create -> strengthen).
+        key = random_embedding(64, np.random.default_rng(7))
+        old_value = random_embedding(64, np.random.default_rng(11))
+        # Orthogonal new output -> value_sim ~ 0 < theta_value -> contradiction.
+        new_value = random_embedding(64, np.random.default_rng(23))
+
+        entry = MemoryEntry(
+            key=key.copy(),
+            value=old_value.copy(),
+            strength=1.0,
+            bias=config.initial_bias,
+            timestamp=0,
+            input_text="I live in Mumbai",
+            output_text="User lives in Mumbai",
+        )
+        layer.memories.append(entry)
+
+        # Confirm this is genuinely a contradiction under the configured thresholds.
+        value_sim = EmbeddingService.cosine_similarity(old_value, new_value)
+        assert value_sim < config.theta_value
+
+        result = layer.update(
+            key, new_value, "I live in Mumbai", "User now lives in Delhi"
+        )
+        assert result["action"] == "contradiction"
+
+        norm = float(np.linalg.norm(layer.memories[0].value))
+        assert abs(norm - 1.0) < 1e-6
+
 
 # --- Equation 3: Recall ---
 

@@ -80,7 +80,14 @@ class TestDisplacementEdges:
         m1 = MemoryEntry(key=k1, value=v1, strength=1.0, bias=0.5, timestamp=1)
         m2 = MemoryEntry(key=k2, value=v2, strength=1.0, bias=0.5, timestamp=1)
 
-        # With displacement enabled
+        # With displacement enabled. Eq 18 now renormalizes (alpha_k, alpha_v,
+        # alpha_d) into a convex combination instead of adding alpha_d on top,
+        # so the comparison baseline must hold (alpha_k, alpha_v) fixed and toggle
+        # only the displacement channel — otherwise we would be comparing two
+        # different weighting schemes. With equal alpha_k == alpha_v, the on/off
+        # weights are the convex averages including/excluding disp_sim, so the
+        # displacement channel raises the weight iff disp_sim exceeds the
+        # key/value-only average.
         cfg_on = MemoryConfig(
             embedding_dim=64,
             displacement_edges_enabled=True,
@@ -91,19 +98,25 @@ class TestDisplacementEdges:
         graph_on = MemoryGraph(cfg_on)
         w_on = graph_on._compute_edge_weight(m1, m2)
 
-        # Without displacement
-        cfg_off = MemoryConfig(embedding_dim=64, displacement_edges_enabled=False)
-        graph_off = MemoryGraph(cfg_off)
-        w_off = graph_off._compute_edge_weight(m1, m2)
+        # Analytic convex baseline with the displacement channel removed:
+        # renormalize (alpha_k, alpha_v) to sum to 1 (0.35/0.35 -> 0.5/0.5) and
+        # take the key+value-only convex average times the temporal factor.
+        key_sim = float(EmbeddingService.cosine_similarity(m1.key, m2.key))
+        val_sim = float(EmbeddingService.cosine_similarity(m1.value, m2.value))
+        temporal = np.exp(-abs(m1.timestamp - m2.timestamp) / cfg_on.tau_temporal)
+        kv_only = 0.5 * key_sim + 0.5 * val_sim
+        w_baseline = kv_only * temporal
 
-        # Displacement should add positive contribution for similar shifts
         d1 = MemoryGraph._displacement(m1)
         d2 = MemoryGraph._displacement(m2)
         disp_sim = float(EmbeddingService.cosine_similarity(d1, d2))
 
-        # If displacement similarity is positive, weight should increase
-        if disp_sim > 0:
-            assert w_on > w_off or abs(w_on - w_off) < 1e-6
+        # Convex bound: the augmented weight never exceeds 1.0 * temporal.
+        assert w_on <= temporal + 1e-6
+        # The displacement channel pulls the weight toward disp_sim: enabling it
+        # raises the weight exactly when disp_sim > key/value-only average.
+        if disp_sim > kv_only:
+            assert w_on > w_baseline - 1e-9
 
     def test_disabled_matches_original(self):
         """When disabled, edge weight should be identical to original Eq 4."""
@@ -132,6 +145,57 @@ class TestDisplacementEdges:
             abs(g1._compute_edge_weight(m1, m2) - g2._compute_edge_weight(m1, m2))
             < 1e-8
         )
+
+    def test_displacement_edge_weight_bounded_by_one(self):
+        """Eq 18: displacement-augmented semantic weight stays bounded <= 1.0.
+
+        Because (alpha_k, alpha_v, alpha_d) are renormalized to a convex
+        combination, every per-channel similarity is in [-1, 1] and the
+        temporal factor is in (0, 1], so the edge weight can never exceed 1.0.
+        The maximum is achieved by two identical memories at the same timestamp
+        (all sims = 1.0, temporal = 1.0): the weight must equal exactly 1.0, not
+        the ~1.3 the old additive scheme (alpha_k + alpha_v + alpha_d) produced.
+        """
+        cfg = MemoryConfig(
+            embedding_dim=64,
+            displacement_edges_enabled=True,
+            alpha_k=0.5,
+            alpha_v=0.5,
+            alpha_d=0.3,
+        )
+        graph = MemoryGraph(cfg)
+
+        k = random_embedding(64, np.random.default_rng(1))
+        v = random_embedding(64, np.random.default_rng(2))
+        # Two identical memories, same timestamp -> max-similarity, no temporal decay.
+        m1 = MemoryEntry(
+            key=k.copy(), value=v.copy(), strength=1.0, bias=0.5, timestamp=5
+        )
+        m2 = MemoryEntry(
+            key=k.copy(), value=v.copy(), strength=1.0, bias=0.5, timestamp=5
+        )
+        w_max = graph._compute_edge_weight(m1, m2)
+        assert w_max <= 1.0 + 1e-9
+        assert abs(w_max - 1.0) < 1e-6
+
+        # Random pairs at various lags must also stay within the bound.
+        for seed in range(20):
+            rng = np.random.default_rng(seed)
+            a = MemoryEntry(
+                key=random_embedding(64, rng),
+                value=random_embedding(64, np.random.default_rng(seed + 100)),
+                strength=1.0,
+                bias=0.5,
+                timestamp=int(seed),
+            )
+            b = MemoryEntry(
+                key=random_embedding(64, np.random.default_rng(seed + 200)),
+                value=random_embedding(64, np.random.default_rng(seed + 300)),
+                strength=1.0,
+                bias=0.5,
+                timestamp=int(seed) + 1,
+            )
+            assert graph._compute_edge_weight(a, b) <= 1.0 + 1e-9
 
     def test_zero_displacement_handled(self):
         """When key == value, displacement should be handled (zero vector)."""

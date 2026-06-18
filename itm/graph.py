@@ -105,11 +105,18 @@ class MemoryGraph:
         w_ij = (α_k · sim(k_i, k_j) + α_v · sim(v_i, v_j)) · exp(-|Δt|/τ)
 
         With displacement (Eq 18):
-        w_ij = (α_k·sim_k + α_v·sim_v + α_d·sim_d) · exp(-|Δt|/τ)
+        w_ij = (α_k'·sim_k + α_v'·sim_v + α_d'·sim_d) · exp(-|Δt|/τ)
 
         Eq 18 adds displacement similarity: memories with the same
         relationship type (person→location, person→preference) get
         stronger edges even if the entities differ.
+
+        The displacement weight is NOT added on top: that would push the max
+        semantic weight to α_k + α_v + α_d ≈ 1.3 and admit ~30% more edges than
+        theta_edge intends. Instead the three coefficients are renormalized to
+        sum to 1.0 (convex combination), so the semantic term stays bounded in
+        [-1, 1] (max 1.0) exactly as in the base case and theta_edge keeps its
+        meaning. This matches the documented rescaling in config.py.
         """
         key_sim = EmbeddingService.cosine_similarity(m1.key, m2.key)
         val_sim = EmbeddingService.cosine_similarity(m1.value, m2.value)
@@ -118,11 +125,15 @@ class MemoryGraph:
             d1 = self._displacement(m1)
             d2 = self._displacement(m2)
             disp_sim = EmbeddingService.cosine_similarity(d1, d2)
-            semantic = (
-                self.config.alpha_k * key_sim
-                + self.config.alpha_v * val_sim
-                + self.config.alpha_d * disp_sim
-            )
+            # Rescale α_k, α_v, α_d to a convex combination so the semantic
+            # term stays bounded by 1.0 (theta_edge stays meaningful).
+            total = self.config.alpha_k + self.config.alpha_v + self.config.alpha_d
+            if total <= 1e-12:
+                total = 1.0
+            ak = self.config.alpha_k / total
+            av = self.config.alpha_v / total
+            ad = self.config.alpha_d / total
+            semantic = ak * key_sim + av * val_sim + ad * disp_sim
         else:
             semantic = self.config.alpha_k * key_sim + self.config.alpha_v * val_sim
 

@@ -1,10 +1,14 @@
 import json
+import logging
+import os
 from pathlib import Path
 
 import numpy as np
 
 from itm.config import MemoryConfig
 from itm.core import MemoryEntry, MemoryLayer
+
+logger = logging.getLogger("itm.storage")
 
 
 class MemoryStorage:
@@ -18,6 +22,34 @@ class MemoryStorage:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    @staticmethod
+    def _atomic_savez(path: Path, **arrays) -> None:
+        """Write an .npz atomically: temp file in same dir, then rename.
+
+        Prevents a Ctrl-C / crash mid-write from leaving a truncated .npz that
+        would brick the next load. os.replace is atomic on the same filesystem.
+        """
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "wb") as f:
+            np.savez(f, **arrays)
+        os.replace(tmp, path)
+
+    @staticmethod
+    def _atomic_write_json(path: Path, obj, indent: int | None = None) -> None:
+        """Write JSON atomically: temp file in same dir, then rename."""
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(obj, f, indent=indent)
+        os.replace(tmp, path)
+
+    @staticmethod
+    def _atomic_save_npy(path: Path, arr) -> None:
+        """Write an .npy array atomically: temp file in same dir, then rename."""
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "wb") as f:
+            np.save(f, arr)
+        os.replace(tmp, path)
+
     def save(self, layer: MemoryLayer) -> str:
         """Save memory state to disk. Returns the directory path."""
         user_dir = self._get_user_dir()
@@ -30,7 +62,7 @@ class MemoryStorage:
                 if layer.context_vector is not None
                 else np.zeros(layer.config.embedding_dim, dtype=np.float32)
             )
-            np.savez(
+            self._atomic_savez(
                 user_dir / "memory.npz",
                 keys=np.empty((0, layer.config.embedding_dim), dtype=np.float32),
                 values=np.empty((0, layer.config.embedding_dim), dtype=np.float32),
@@ -41,8 +73,7 @@ class MemoryStorage:
                 meta=np.array([layer.timestep], dtype=np.int64),
                 context_vector=ctx,
             )
-            with open(user_dir / "memory_texts.json", "w") as f:
-                json.dump([], f)
+            self._atomic_write_json(user_dir / "memory_texts.json", [])
             return str(user_dir)
 
         keys = np.stack([m.key for m in layer.memories])
@@ -61,7 +92,7 @@ class MemoryStorage:
             else np.zeros(layer.config.embedding_dim, dtype=np.float32)
         )
 
-        np.savez(
+        self._atomic_savez(
             user_dir / "memory.npz",
             keys=keys,
             values=values,
@@ -82,8 +113,7 @@ class MemoryStorage:
             }
             for m in layer.memories
         ]
-        with open(user_dir / "memory_texts.json", "w") as f:
-            json.dump(texts, f, indent=2)
+        self._atomic_write_json(user_dir / "memory_texts.json", texts, indent=2)
 
         # Equation 24: save context_at_creation vectors
         ctx_at_creation = []
@@ -95,7 +125,7 @@ class MemoryStorage:
                     np.zeros(layer.config.embedding_dim, dtype=np.float32)
                 )
         if ctx_at_creation:
-            np.save(
+            self._atomic_save_npy(
                 user_dir / "context_at_creation.npy",
                 np.stack(ctx_at_creation),
             )
@@ -116,13 +146,41 @@ class MemoryStorage:
                     for n in layer.hierarchy.l3_identities
                 ],
             }
-            with open(user_dir / "hierarchy.json", "w") as f:
-                json.dump(hierarchy_data, f, indent=2)
+            self._atomic_write_json(
+                user_dir / "hierarchy.json", hierarchy_data, indent=2
+            )
 
         return str(user_dir)
 
     def load(self, layer: MemoryLayer) -> bool:
-        """Load memory state from disk. Returns True if loaded, False if no saved state."""
+        """Load memory state from disk, falling back to fresh on corruption.
+
+        Returns True if loaded, False if there is no saved state OR if the saved
+        state is unreadable (truncated .npz, malformed JSON, missing fields).
+        On corruption the layer is reset to a clean empty state instead of
+        crashing enable_memory() on startup. Saves are atomic (temp + rename),
+        so a Ctrl-C mid-save should never produce a partial file in the first
+        place, but a fresh-state fallback is the safety net if one slips through.
+        """
+        try:
+            return self._load_unguarded(layer)
+        except Exception as exc:  # noqa: BLE001 — corruption must not crash startup
+            logger.warning("Failed to load memory state (%s); starting fresh.", exc)
+            self._reset_layer(layer)
+            return False
+
+    @staticmethod
+    def _reset_layer(layer: MemoryLayer) -> None:
+        """Reset a layer to a clean empty state after a failed/corrupt load."""
+        layer.memories = []
+        layer.timestep = 0
+        layer.context_vector = None
+        layer.graph.rebuild(layer.memories)
+        if layer.config.sparse_recall_enabled:
+            layer.sparse_index.rebuild([])
+
+    def _load_unguarded(self, layer: MemoryLayer) -> bool:
+        """Load memory state from disk. Returns True if loaded, False if absent."""
         user_dir = self._get_user_dir()
         npz_path = user_dir / "memory.npz"
         json_path = user_dir / "memory_texts.json"

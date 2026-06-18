@@ -149,7 +149,11 @@ class MemoryConfig:
     # Similar displacements = similar relationship types → stronger edges.
     displacement_edges_enabled: bool = False
     alpha_d: float = 0.3  # displacement similarity weight in edge computation
-    # When enabled, alpha_k and alpha_v are scaled: total = alpha_k + alpha_v + alpha_d
+    # When enabled, alpha_k, alpha_v, alpha_d are renormalized to a convex
+    # combination (each divided by alpha_k + alpha_v + alpha_d) so they sum to
+    # 1.0. The semantic edge term then stays bounded in [-1, 1] (max 1.0), the
+    # same bound as the base Eq 4 case, and theta_edge keeps its meaning instead
+    # of admitting ~30% more edges from a 1.3-scaled weight.
 
     # Equation 19: Sparse Lexical Recall (BM25, Robertson 1994)
     # Dense embeddings miss exact keyword matches (phone numbers, names, codes).
@@ -198,12 +202,22 @@ class MemoryConfig:
     #
     # sim_mc(q, m_i) = w_t·sim(q, k_i) + w_d·sim(d_q, d_i) + w_c·sim(c_q, c_i)
     #
-    # For contradiction: high topic sim + low displacement sim → opposing stances.
+    # Decision rule: a contradiction is flagged when the subject matches
+    # (topic_sim >= theta_key) AND the weighted multi-channel agreement is low
+    # (sim_mc < theta_multichannel). High topic sim + low displacement/context
+    # agreement → same subject, opposing stance.
+    # The three channel weights form a convex combination (they sum to 1.0).
     # No LLM calls — all channels derived from existing embeddings.
     multichannel_enabled: bool = False
     w_channel_topic: float = 0.5  # topic channel weight
     w_channel_disp: float = 0.3  # displacement/stance channel weight
     w_channel_ctx: float = 0.2  # context channel weight
+    # Threshold on the weighted sim_mc agreement score. Below this (with topic
+    # matching) the update is treated as a contradiction. Default chosen so that
+    # a high-topic (1.0) but stance-flipped (disp≈-1, ctx≈neutral 0.5) memory
+    # scores sim_mc ≈ 0.5·1 + 0.3·(-1) + 0.2·0.5 = 0.30 < 0.55 → contradiction,
+    # while an aligned restatement (topic≈disp≈ctx≈1) scores ≈1.0 → no conflict.
+    theta_multichannel: float = 0.55
 
     # Equations 25-27: Soft Create-vs-Strengthen (Sigmoid Activation, 1986)
     # NN parallel: Sigmoid replacing step function enabled backpropagation —

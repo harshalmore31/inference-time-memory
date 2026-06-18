@@ -142,12 +142,14 @@ class MemoryLayer:
     Equation 1 — Strength Update:
         s_i(t+1) = s_i(t) * gamma + alpha * sim(e_in, k_i)
 
-    Equation 2 — Value Update (on contradiction):
-        v_i(t+1) = v_i(t) + b_i * (e_out_new - v_i(t))
+    Equation 2 — Value Update (hard, on contradiction):
+        v_i(t+1) = normalize( v_i(t) + b_i * (e_out_new - v_i(t)) )
+        Values are unit vectors → renormalized after the blend.
 
     Equation 2b — Soft Value Drift (gradient descent-inspired):
-        v_i += b_i · (1 - val_sim) · (v_new - v_i)
-        Always-on proportional nudge during strengthen — no threshold needed.
+        v_i(t+1) = normalize( v_i + b_i · (1 - sim(v_i, e_out)) · (e_out - v_i) )
+        Soft-drift counterpart to Eq 2: an always-on, similarity-gated nudge
+        applied during a (non-contradicting) strengthen — no threshold needed.
 
     Equation 3 — Recall:
         R(q) = sum(s_i * sim(q, k_i) * v_i) / sum(s_i * sim(q, k_i))
@@ -221,6 +223,7 @@ class MemoryLayer:
 
     Equation 24 — Multi-Channel Contradiction (Multi-Head Attention, Vaswani 2017):
         sim_mc = w_t·sim(q,k) + w_d·sim(d_q,d_i) + w_c·sim(c_q,c_i)
+        contradiction ⇔ topic >= θ_key AND sim_mc < θ_multichannel
 
     Equation 25 — Soft Create-vs-Strengthen (Sigmoid Activation, 1986):
         p_strengthen = σ(β·(sim - θ_local))
@@ -348,6 +351,12 @@ class MemoryLayer:
 
         Equation 11 (adaptive): weights = softmax(max_scores / T)
         Each query dynamically determines which heads to trust.
+
+        Convexity: the head weights form a convex combination (sum to 1.0).
+        The softmax branch (Eq 11) is convex by construction. In the static
+        branch the four base heads already sum to 1.0; if the sparse head
+        (Eq 19, recall_w_sparse) is enabled the weights are renormalized so the
+        total stays 1.0 instead of drifting to 1.15.
         """
         n = len(self.memories)
         if n == 0:
@@ -431,6 +440,17 @@ class MemoryLayer:
                 if self.config.sparse_recall_enabled
                 else 0.0
             )
+            # Equation 9 is a convex combination: head weights must sum to 1.0.
+            # The base four heads already sum to 1.0, so enabling the sparse head
+            # (recall_w_sparse) would push the total to 1.15. Renormalize so the
+            # effective weights stay convex whether or not sparse is enabled.
+            w_total = w1 + w2 + w3 + w4 + w5
+            if w_total > 1e-12:
+                w1 /= w_total
+                w2 /= w_total
+                w3 /= w_total
+                w4 /= w_total
+                w5 /= w_total
 
         # Combine heads
         multi_score = w1 * h1 + w2 * h2 + w3 * h3 + w4 * h4 + w5 * h5
@@ -684,8 +704,16 @@ class MemoryLayer:
           displacement = sim(d_new, d_old)             [same stance?]
           context = sim(c_now, c_at_creation)          [same conversation?]
 
-        Contradiction = high topic sim + low displacement sim.
-        This catches "I love Python" vs "I hate Python" (topic=0.97, disp=low).
+        Published score (Eq 24):
+          sim_mc = w_t·topic + w_d·disp + w_c·ctx      (convex: w_t+w_d+w_c = 1)
+
+        Decision rule (the implemented behavior):
+          contradiction  ⇔  topic >= theta_key  AND  sim_mc < theta_multichannel
+
+        The subject must match (topic gate) and the weighted multi-channel
+        agreement must be low. High topic + low displacement/context agreement
+        means same subject, opposing stance — e.g. "I love Python" vs
+        "I hate Python" (topic≈0.97, disp low → sim_mc drops below threshold).
         """
         if not self.config.multichannel_enabled:
             return self._detect_contradiction(memory, new_output_embedding, key_sim)
@@ -719,22 +747,15 @@ class MemoryLayer:
                 )
             )
 
-        # Weighted multi-channel: high topic + low displacement = contradiction
+        # Published weighted multi-channel agreement score (Eq 24).
         w_t = self.config.w_channel_topic
         w_d = self.config.w_channel_disp
         w_c = self.config.w_channel_ctx
+        sim_mc = w_t * topic_sim + w_d * disp_sim + w_c * ctx_sim
 
-        # Value similarity (standard check)
-        val_sim = float(
-            EmbeddingService.cosine_similarity(memory.value, new_output_embedding)
-        )
-
-        # Combined contradiction signal: topic agrees, displacement/value disagrees
-        agreement = w_t * topic_sim + w_d * disp_sim + w_c * ctx_sim
-        # If topic is high but displacement is low → contradiction
-        return topic_sim > self.config.theta_key and (
-            val_sim < self.config.theta_value or disp_sim < self.config.theta_value
-        )
+        # Same subject (topic gate already passed) but low overall agreement
+        # across the channels → contradiction.
+        return sim_mc < self.config.theta_multichannel
 
     # ── Equations 25-27: Soft Create-vs-Strengthen (Sigmoid) ──
 
@@ -1147,9 +1168,15 @@ class MemoryLayer:
             )
 
             if is_contradiction:
-                # Equation 2: Value update
+                # Equation 2: Value update — values are unit vectors, so the
+                # blended value must be renormalized to unit norm (averaging two
+                # unit vectors leaves norm < 1, which would make contradicted
+                # values under-contribute in recall_weighted_value).
                 delta_v = output_embedding - mem.value
                 mem.value = mem.value + mem.bias * delta_v
+                norm = np.linalg.norm(mem.value)
+                if norm > 1e-8:
+                    mem.value = mem.value / norm
                 mem.strength *= self.config.delta
 
                 # Also create new memory for the updated info
@@ -1163,7 +1190,14 @@ class MemoryLayer:
                     "details": f"sim={best_sim:.3f}, value shifted, new memory created",
                 }
 
-            # Equation 2b: Soft value drift (gradient descent-inspired).
+            # Equation 2b: Soft value drift (gradient-descent inspired).
+            # Soft-drift counterpart to the Eq 2 hard contradiction update.
+            # When a reinforcing output is NOT a contradiction, the stored value
+            # still nudges toward the new output, scaled by how much they differ:
+            #     v_i(t+1) = normalize( v_i + b_i·(1 - sim(v_i, e_out))·(e_out - v_i) )
+            # The (1 - sim) gain shrinks to 0 as the value already agrees, so a
+            # perfectly aligned restatement leaves the value unchanged, whereas a
+            # mildly divergent one drifts proportionally. Renormalized to unit norm.
             val_sim = float(
                 EmbeddingService.cosine_similarity(mem.value, output_embedding)
             )
