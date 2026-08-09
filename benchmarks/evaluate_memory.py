@@ -501,19 +501,15 @@ def print_report(results: dict):
 
     print("=" * 70)
 
-    # Comparison table
-    print("\nComparison with published baselines (LLM-as-Judge):")
-    print(f"  {'System':<25} {'Overall':>8}")
-    print(f"  {'-'*35}")
-    baselines = [
-        ("Mem0 (graph)", "~66.9%"),
-        ("Letta (filesystem)", "~74.0%"),
-        ("Zep", "~75.1%"),
-        ("Our Memory Layer", f"{overall_judge*100:.1f}%"),
-    ]
-    for name, score in baselines:
-        print(f"  {name:<25} {score:>8}")
-    print()
+    # No cross-system comparison is printed here on purpose. Published LOCOMO
+    # numbers for other memory systems use different answer models, prompts,
+    # retrieval budgets and judges, so printing them beside this run's number
+    # invites a head-to-head reading that the measurement does not support.
+    # The comparison this harness DOES support is the retrieval baseline in
+    # benchmarks/retrieval_baseline.py, which holds corpus, embedder, questions
+    # and top_k fixed.
+    print(f"\nOverall judge accuracy (incl. adversarial): {overall_judge*100:.1f}%")
+    print("Interpret against the always-refuse floor; see benchmarks/README.md.\n")
 
 
 # ═══════════════════════════════════════════════════════════

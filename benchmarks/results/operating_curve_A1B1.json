@@ -1,0 +1,171 @@
+{
+  "benchmark": "LOCOMO (ACL 2024)",
+  "config": "A1B1",
+  "answer_model": "gpt-4.1-nano",
+  "judge_model": "gpt-4.1-nano",
+  "embedding_model": "BAAI/bge-m3",
+  "sweep_knob": "top_k (retrieval budget)",
+  "sweep": [
+    0,
+    1,
+    2,
+    3,
+    5,
+    8,
+    12,
+    20,
+    30
+  ],
+  "seed": 0,
+  "subsample": {
+    "answerable": 300,
+    "adversarial": 200
+  },
+  "note": "k=0 is the empty-context anchor, i.e. the always-refuse policy. Any adversarial accuracy must be read against it. Adversarial questions are scored by refusal detection, answerable by LLM judge.",
+  "points": [
+    {
+      "top_k": 0,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.07,
+      "adversarial_judge": 0.9,
+      "answerable_refusal_rate": 0.5733,
+      "answerable_gold_present": 0.0,
+      "per_category_judge": {
+        "multi_hop": 0.1273,
+        "temporal": 0.0159,
+        "open_domain": 0.0526,
+        "single_hop": 0.0736
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 1,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.2067,
+      "adversarial_judge": 0.92,
+      "answerable_refusal_rate": 0.5033,
+      "answerable_gold_present": 0.3633,
+      "per_category_judge": {
+        "multi_hop": 0.0909,
+        "temporal": 0.127,
+        "open_domain": 0.0526,
+        "single_hop": 0.2945
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 2,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.2767,
+      "adversarial_judge": 0.915,
+      "answerable_refusal_rate": 0.4033,
+      "answerable_gold_present": 0.4767,
+      "per_category_judge": {
+        "multi_hop": 0.1818,
+        "temporal": 0.2063,
+        "open_domain": 0.1053,
+        "single_hop": 0.3558
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 3,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.2833,
+      "adversarial_judge": 0.88,
+      "answerable_refusal_rate": 0.37,
+      "answerable_gold_present": 0.56,
+      "per_category_judge": {
+        "multi_hop": 0.2,
+        "temporal": 0.2222,
+        "open_domain": 0.0526,
+        "single_hop": 0.362
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 5,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.29,
+      "adversarial_judge": 0.86,
+      "answerable_refusal_rate": 0.2933,
+      "answerable_gold_present": 0.6633,
+      "per_category_judge": {
+        "multi_hop": 0.1455,
+        "temporal": 0.254,
+        "open_domain": 0.1579,
+        "single_hop": 0.3681
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 8,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.3267,
+      "adversarial_judge": 0.82,
+      "answerable_refusal_rate": 0.25,
+      "answerable_gold_present": 0.75,
+      "per_category_judge": {
+        "multi_hop": 0.2909,
+        "temporal": 0.2698,
+        "open_domain": 0.1579,
+        "single_hop": 0.3804
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 12,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.3233,
+      "adversarial_judge": 0.73,
+      "answerable_refusal_rate": 0.23,
+      "answerable_gold_present": 0.7967,
+      "per_category_judge": {
+        "multi_hop": 0.2364,
+        "temporal": 0.2222,
+        "open_domain": 0.1579,
+        "single_hop": 0.411
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 20,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.3533,
+      "adversarial_judge": 0.66,
+      "answerable_refusal_rate": 0.2233,
+      "answerable_gold_present": 0.8367,
+      "per_category_judge": {
+        "multi_hop": 0.2727,
+        "temporal": 0.2222,
+        "open_domain": 0.2105,
+        "single_hop": 0.4479
+      },
+      "errors": 0
+    },
+    {
+      "top_k": 30,
+      "n_answerable": 300,
+      "n_adversarial": 200,
+      "answerable_judge": 0.3467,
+      "adversarial_judge": 0.66,
+      "answerable_refusal_rate": 0.2133,
+      "answerable_gold_present": 0.89,
+      "per_category_judge": {
+        "multi_hop": 0.2909,
+        "temporal": 0.254,
+        "open_domain": 0.2105,
+        "single_hop": 0.4172
+      },
+      "errors": 0
+    }
+  ]
+}

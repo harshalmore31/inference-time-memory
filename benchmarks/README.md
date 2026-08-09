@@ -1,16 +1,36 @@
 # LOCOMO benchmark for ITM
 
-This directory holds the canonical evaluation harness and the small result
-aggregates needed to reproduce the numbers in the top-level README's Results
-section. The harness measures a controlled ablation of two memory behaviors;
-it is not a head-to-head against other systems.
+This directory holds the evaluation harnesses and the small result aggregates
+needed to reproduce the numbers in the top-level README's Results section.
+
+Three measurements live here, and they answer three different questions:
+
+| harness | question | API cost |
+|---|---|---|
+| `evaluate_memory.py` | Do the two toggled behaviors help? (self-ablation) | full run |
+| `retrieval_baseline.py` | Does the recall machinery beat trivial retrieval? | **zero** |
+| `operating_curve.py` | Where does the system sit on the answerable-vs-adversarial frontier? | sweep |
+
+The first is an ablation of ITM against itself, not a head-to-head against
+other systems. The second is the apples-to-apples comparison it does not
+provide. The third exists because a single accuracy number on a benchmark that
+mixes answerable and unanswerable questions is uninterpretable: refusing
+everything scores ~100% on the adversarial split for free.
 
 ## What is committed
 
-- `evaluate_memory.py` -- the harness. Ingests each LOCOMO conversation into a
-  fresh `MemoryLayer`, recalls evidence per question with `recall_graph`,
-  answers with an OpenAI model, and scores with token-F1 plus an
-  LLM-as-judge. Per-conversation checkpointing.
+- `evaluate_memory.py` -- the main harness. Ingests each LOCOMO conversation
+  into a fresh `MemoryLayer`, recalls evidence per question with
+  `recall_graph`, answers with an OpenAI model, and scores with token-F1 plus
+  an LLM-as-judge. Per-conversation checkpointing.
+- `retrieval_baseline.py` -- dense / BM25 / hybrid retrieval baselines on the
+  same corpus, same embeddings, same questions, same `top_k`. Reports recall@k
+  and an exact paired McNemar test against a stored per-question ITM result
+  file. No API key needed.
+- `operating_curve.py` -- sweeps the retrieval budget (`top_k`, including k=0,
+  the empty-context always-refuse anchor) and reports answerable accuracy,
+  adversarial accuracy, refusal rate and gold-in-top-k at each point.
+  Embeddings are cached on disk across runs.
 - `results/locomo_memory_stats_{A0B0,A1B0,A1B1}.json` -- the three aggregate
   stat files for baseline, +A, and +A+B.
 - `results/ablation_summary.json` -- a single consolidated summary of the
@@ -80,6 +100,39 @@ Each run writes `results/locomo_memory_results_<tag>.json` (per-question, with
 checkpointing) and `results/locomo_memory_stats_<tag>.json` (the aggregate).
 
 To debug on a single conversation, add `--sample-id conv-26 --verbose`.
+
+## Run the retrieval baselines (no API key required)
+
+This is the comparison the three-arm ablation does not make: is the recall
+machinery better than one line of cosine similarity? Everything except the
+retriever is held fixed, and the metric is recall@k, so no answer model is
+involved.
+
+```bash
+python benchmarks/retrieval_baseline.py \
+  --data-file benchmarks/locomo/data/locomo10.json \
+  --itm-results benchmarks/results/locomo_memory_results_A1B1.json
+```
+
+Writes `results/retrieval_baseline.json`.
+
+## Run the abstention operating curve
+
+Sweeps how much evidence reaches the reader and traces the resulting frontier.
+`k=0` is included deliberately as the empty-context anchor: it is the
+always-refuse policy, and it is the floor against which any adversarial
+accuracy has to be read.
+
+```bash
+python benchmarks/operating_curve.py \
+  --data-file benchmarks/locomo/data/locomo10.json \
+  --answerable 300 --adversarial 200
+```
+
+Add `--full` for every question, `--sweep 0,1,3,5,10,20` to change the
+operating points, or `--baseline-gate` to trace the same curve with the
+chat-tuned gate instead of transcript ingest. Writes
+`results/operating_curve_<tag>.json`.
 
 ## Metrics
 

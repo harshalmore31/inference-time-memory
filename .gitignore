@@ -45,6 +45,8 @@ research.md
 benchmarks/*
 !benchmarks/README.md
 !benchmarks/evaluate_memory.py
+!benchmarks/retrieval_baseline.py
+!benchmarks/operating_curve.py
 
 # Keep only the small result aggregates, not the large per-question dumps,
 # logs, or intermediate progress/checkpoint files.
@@ -55,6 +57,8 @@ benchmarks/results/*
 !benchmarks/results/locomo_memory_stats_A1B1.json
 !benchmarks/results/ablation_summary.json
 !benchmarks/results/rejudge_mini_subsample.json
+!benchmarks/results/retrieval_baseline.json
+!benchmarks/results/operating_curve_*.json
 
 # Stays ignored: the ~22MB LOCOMO dataset, run logs, large per-question result
 # dumps, progress/checkpoint files, ad-hoc diagnostic and runner scripts.

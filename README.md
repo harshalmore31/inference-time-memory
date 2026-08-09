@@ -21,9 +21,15 @@ BM25, ACT-R decay, prospect theory).
 
 What ITM does NOT do: it does not call an LLM to classify, extract, or
 summarize memories, and it does not improve the answering model's reasoning.
-Its job is to put the right evidence in front of the model. The measured
-results below show that this is where most of the lift comes from, and also
-where the ceiling is.
+Its job is to put the right evidence in front of the model.
+
+Read the measured results before the equation tables. The strongest finding in
+this repo is a negative one -- an input gate tuned on interactive chat silently
+discarded 87-94% of turns when fed pre-recorded transcripts -- and the recall
+machinery, measured against trivial retrievers on the same corpus, beats plain
+cosine similarity by 2.7 points and ties a five-line dense+BM25 hybrid. The
+equation count is a description of the implementation, not a claim about how
+much of it is load-bearing.
 
 ---
 
@@ -31,19 +37,59 @@ where the ceiling is.
 
 ITM was evaluated on the full LOCOMO benchmark (10 conversations, 1986
 questions) with `gpt-4.1-nano` answering and judging, BGE-M3 embeddings, and
-`top_k=5`. The headline is a controlled ablation of two memory behaviors, not
-an absolute-accuracy or head-to-head claim:
+`top_k=5`. Three claims, in descending order of how well they are supported.
 
-- On answerable questions (LOCOMO cats 1-4, n=1540), judge accuracy goes
-  3.57% -> 19.74% -> 30.58% as two flags are turned on (8.6x relative lift).
-- The reason is retrieval: gold evidence appears in the recalled top-5
-  5.3% -> 41.3% -> 65.6% of the time.
-- The honest ceiling: even when gold IS in context, `gpt-4.1-nano` answers
-  correctly only ~38% of the time. ITM retrieves the evidence; the answer
-  model is the bottleneck.
+**1. The main result is a negative one, about a gate.** ITM's input gate (Eq 10)
+was tuned on interactive chat, where a high context-continuity signal marks a
+mid-conversation follow-up worth filtering. In a pre-recorded transcript every
+turn is a continuation *by construction*, so that signal carries no information
+while still consuming threshold headroom, and 87-94% of turns were discarded.
+Gold evidence was therefore almost never stored. Turning the gate off
+(`transcript_ingest`) and de-biasing recall (`spreading_debias_enabled`) moves
+answerable accuracy 3.57% -> 19.74% -> 30.58% and gold-in-top-5 5.3% -> 41.3%
+-> 65.6%.
 
-The full table, the metrics, the robustness checks, and the caveats are in
-[Results](#results). The benchmark is reproducible from this repo; see
+Read that as *a hyperparameter regime that silently failed to transfer*, not as
+evidence the memory layer works. `transcript_ingest=True` returns early in
+`itm/core.py`, bypassing the gate, the create-vs-strengthen merge, global decay
+and cold start, so the winning arm is closer to "store every turn" than to the
+full 29-equation pipeline. The ablation measures ITM recovering from its own
+miscalibration.
+
+**2. Against trivial retrieval, the recall machinery wins narrowly and is
+matched by a hybrid.** With corpus, embeddings, questions and `top_k` held
+fixed (n=1536 paired, zero API calls, `benchmarks/retrieval_baseline.py`):
+
+| retriever | recall@5 | paired exact McNemar vs ITM |
+|---|---|---|
+| ITM (all 29 equations) | 65.8% | - |
+| cosine similarity, one line | 63.0% | ITM +2.73pp, p=0.012 |
+| dense + BM25 hybrid, ~5 lines | **67.3%** | ITM -1.50pp, p=0.130 |
+| BM25 alone | 51.2% | ITM +14.58pp, p<1e-6 |
+
+ITM is significantly better than plain cosine and statistically
+indistinguishable from a five-line hybrid. Per category it is *worse* than
+cosine on multi-hop (54.3% vs 57.8%) -- the category graph spreading exists for
+-- and better on temporal (76.6% vs 70.1%) and open-domain (42.4% vs 38.0%).
+
+**3. Absolute accuracy is capped downstream of retrieval, but the cause is not
+yet isolated.** Even when gold evidence is in the top-5, `gpt-4.1-nano` answers
+correctly only ~38% of the time. Part of that is the reader; part is that
+`itm/formatting.py` truncates each memory to 120 characters while 69.4% of
+LOCOMO turns are longer, so 35.7% of retrieved evidence text never reaches the
+prompt. ITM's contribution is getting evidence in front of the model, not
+improving reasoning -- but see
+[Honest ceiling and limitations](#honest-ceiling-and-limitations) before
+treating ~38% as a reader ceiling.
+
+A caution that applies to every LOCOMO number, including the ones above: the
+benchmark mixes answerable and adversarial questions, and a system that refuses
+everything scores ~100% on the adversarial split for free. See
+[Abstention operating curve](#abstention-operating-curve) before reading any
+single accuracy figure.
+
+The full tables, metrics, robustness checks and caveats are in
+[Results](#results). Everything is reproducible from this repo; see
 [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
@@ -84,8 +130,17 @@ background thread and does not block the response. This is described in the
 
 ## The 29 Equations
 
-Every memory behavior is a closed-form update mapped to a neural-network
-mechanism. No heuristics, no LLM classification.
+Every memory behavior is a closed-form update over embedding vectors, mapped to
+a neural-network mechanism, and computed without any LLM call.
+
+An honest caveat on "derived": the *form* of each update is taken from the cited
+mechanism, but the constants are not derived from it. Thresholds, head weights
+and sharpness parameters were hand-tuned against BGE-M3's similarity
+distribution, and several are explicitly disabled because that distribution
+makes them non-discriminative (`adaptive_heads`, `gate_w_entropy`). The
+measured consequence of tuning against one input regime is documented above.
+Treat the table as a map from mechanism to implementation, not as a claim that
+the constants fall out of the theory.
 
 ### Phase 1: Core Memory (Perceptron + GNN)
 
@@ -315,7 +370,13 @@ The ablation toggles two memory behaviors, both default OFF:
 | Adversarial (cat 5) | 98.0% | 89.7% | 85.7% |
 
 Overall judge accuracy including the adversarial category: 24.8% -> 35.5% ->
-43.0%.
+43.0%. **Do not read the first of those as a baseline capability.** A policy
+that answers nothing at all scores 0% on the 1540 answerable questions and
+~100% on the 446 adversarial ones, i.e. 446/1986 = **22.5% overall**. The A0B0
+baseline's 24.8% sits 2.3 points above that floor, and its 98.0% adversarial
+accuracy is bought entirely by refusing 86.9% of answerable questions. This is
+why the tables above lead with the answerable split, and why the adversarial
+regression in the next section cannot be read as a straight loss.
 
 ### Robustness
 
@@ -332,18 +393,73 @@ Overall judge accuracy including the adversarial category: 24.8% -> 35.5% ->
   agreement is 0.745 across the judged pairs. See
   `benchmarks/results/rejudge_mini_subsample.json`.
 
+### Abstention operating curve
+
+Refusal and answering are one tradeoff, not two results. Reporting a single
+adversarial accuracy is meaningless without saying where on that tradeoff the
+system was sitting. This sweeps the retrieval budget -- how much evidence
+reaches the reader -- and traces the frontier
+(`benchmarks/operating_curve.py`, stratified subsample of 300 answerable + 200
+adversarial questions, `gpt-4.1-nano`, A1B1 config, seed 0):
+
+| top_k | answerable acc | adversarial acc | refusal (answerable) | gold@k |
+|---|---|---|---|---|
+| 0 (empty context) | 7.0% | 90.0% | 57.3% | 0.0% |
+| 1 | 20.7% | 92.0% | 50.3% | 36.3% |
+| 2 | 27.7% | 91.5% | 40.3% | 47.7% |
+| 3 | 28.3% | 88.0% | 37.0% | 56.0% |
+| 5 | 29.0% | 86.0% | 29.3% | 66.3% |
+| 8 | 32.7% | 82.0% | 25.0% | 75.0% |
+| 12 | 32.3% | 73.0% | 23.0% | 79.7% |
+| 20 | 35.3% | 66.0% | 22.3% | 83.7% |
+| 30 | 34.7% | 66.0% | 21.3% | 89.0% |
+
+Three things this makes visible that the three-arm ablation cannot:
+
+- **The adversarial score is mostly not a capability.** With k=0 -- literally no
+  memory at all -- adversarial accuracy is already 90.0%. The published
+  baseline's 98.0% lives in that regime. The 98.0% -> 85.7% "regression" is
+  movement along this curve, not a loss of a skill the system had.
+- **Retrieval stops being the binding constraint around k=8.** From k=8 to
+  k=30, gold-in-top-k climbs 75.0% -> 89.0% while answerable accuracy moves
+  32.7% -> 34.7%, inside noise at this sample size. Past that point extra
+  evidence buys nothing on answerable questions and costs 16 points of
+  adversarial accuracy. The published `top_k=5` is on the steep part of the
+  curve, not at a tuned optimum.
+- **The subsample tracks the full run.** At k=5 this curve gives 29.0%
+  answerable / 86.0% adversarial against 30.6% / 85.7% on all 1986 questions,
+  which is the consistency check that makes the rest of the curve credible.
+
+Any comparison of abstention behavior between two systems, or between two
+configurations of this one, should be made at a matched point on this curve.
+
 ### Honest ceiling and limitations
 
-- The answer model is the bottleneck, not retrieval. Even with gold evidence
-  in the top-5 context, `gpt-4.1-nano` answers correctly only ~37.6% of the
-  time. ITM's contribution is "get the right evidence in front of the model"
-  (gold-in-top5 rose from 5.3% to 65.6%); it does not make the model reason
-  better.
+- The answer model is *a* bottleneck: even with gold evidence in the top-5,
+  `gpt-4.1-nano` answers correctly only ~37.6% of the time. But that number is
+  confounded and should not yet be read as a pure reader-capability ceiling.
+  `itm/formatting.py` truncates each recalled memory to 120 characters of input
+  text and 100 of output text, while 69.4% of LOCOMO turns are longer than 120
+  characters; **35.7% of retrieved evidence text never reaches the model**. A
+  turn can be retrieved into the top-5 and still have the answer-bearing span
+  cut off, so "gold in context" and "gold in the prompt" are not the same
+  event. Raising the truncation limit is an untested lever on the absolute
+  numbers, and it must be ruled out before the ceiling is attributed to the
+  reader.
 - Open-domain (cat 3, 10.4%) is the weakest category, followed by multi-hop
   (cat 1, 20.2%).
-- Better recall costs a few points of appropriate abstention on adversarial
-  trap questions (cat 5: 98.0% -> 85.7%). Storing more evidence makes the model
-  more willing to answer, including when it should refuse.
+- Retrieving more evidence makes the model more willing to answer, including
+  when it should refuse: adversarial accuracy falls 98.0% -> 85.7% while
+  refusal on answerable questions falls 86.9% -> 33.4%. Both numbers are
+  single points on a tradeoff, not independent results -- see
+  [Abstention operating curve](#abstention-operating-curve). The baseline's
+  98.0% is what an almost-always-refusing system gets for free, so the honest
+  comparison is at matched refusal rates, not at these two arbitrary points.
+- The recall machinery is not what produces most of the lift. Against
+  trivial retrievers on the same corpus it is +2.7pp over plain cosine
+  (p=0.012) and statistically tied with a dense+BM25 hybrid (p=0.13), and it
+  loses to both on multi-hop. See the table in
+  [What is true and measured](#what-is-true-and-measured-read-this-first).
 - `top_k=5` is a lower bound; larger k was not swept.
 - Single seed, no error bars. These are relative-improvement / ablation
   results, not SOTA-competitive absolute accuracy.
@@ -354,10 +470,17 @@ Published LOCOMO numbers for retrieval/memory systems such as RAG variants,
 mem0, MemGPT, and Zep are typically in the 60-75% range, but under different
 answer models, prompts, retrieval budgets, and scoring. This repo contains no
 head-to-head measurement against those systems, and ITM's absolute accuracy
-here (30.58% on answerable) is well below them. ITM's claim is narrow and
-internal: an ablation showing that two memory behaviors raise gold-evidence
-retrieval and answerable accuracy by a large relative factor, with all memory
-operations done in numpy and no LLM calls.
+here (30.58% on answerable) is well below them. Nothing here should be read as
+a ranking against them.
+
+The one head-to-head this repo *does* support is against trivial retrievers,
+because there everything but the retriever is held fixed: dense cosine, BM25,
+and a dense+BM25 hybrid over the identical corpus and embeddings
+(`benchmarks/retrieval_baseline.py`, table in
+[What is true and measured](#what-is-true-and-measured-read-this-first)). ITM
+beats plain cosine by 2.7pp and ties the hybrid. That is the honest size of the
+recall machinery's contribution, and it is much smaller than the headline
+ablation suggests.
 
 Reproduce everything in [`benchmarks/README.md`](benchmarks/README.md).
 

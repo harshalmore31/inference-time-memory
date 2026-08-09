@@ -1,0 +1,68 @@
+{
+  "benchmark": "LOCOMO (ACL 2024)",
+  "metric": "recall@5 (gold evidence turn in top-5)",
+  "embedding_model": "BAAI/bge-m3",
+  "hybrid_weight": 0.15,
+  "n_questions": 1536,
+  "unmatched": 0,
+  "note": "Same corpus, same embeddings, same questions, same top_k as the transcript-ingest arm. No API calls: this measures retrieval only.",
+  "recall_at_5": {
+    "dense": 0.6302,
+    "bm25": 0.5117,
+    "hybrid": 0.6725,
+    "itm": 0.6576
+  },
+  "per_category": {
+    "1": {
+      "n": 282,
+      "dense": 0.578,
+      "bm25": 0.3156,
+      "hybrid": 0.5745,
+      "itm": 0.5426
+    },
+    "2": {
+      "n": 321,
+      "dense": 0.7009,
+      "bm25": 0.5888,
+      "hybrid": 0.7477,
+      "itm": 0.7664
+    },
+    "3": {
+      "n": 92,
+      "dense": 0.3804,
+      "bm25": 0.2609,
+      "hybrid": 0.4022,
+      "itm": 0.4239
+    },
+    "4": {
+      "n": 841,
+      "dense": 0.648,
+      "bm25": 0.5755,
+      "hybrid": 0.7063,
+      "itm": 0.6801
+    }
+  },
+  "mcnemar_vs_itm": {
+    "dense": {
+      "itm_only_wins": 154,
+      "baseline_only_wins": 112,
+      "delta_recall_pp": -2.73,
+      "p_value_exact_two_sided": 0.011799,
+      "significant_at_0.05": true
+    },
+    "bm25": {
+      "itm_only_wins": 316,
+      "baseline_only_wins": 92,
+      "delta_recall_pp": -14.58,
+      "p_value_exact_two_sided": 0.0,
+      "significant_at_0.05": true
+    },
+    "hybrid": {
+      "itm_only_wins": 94,
+      "baseline_only_wins": 117,
+      "delta_recall_pp": 1.5,
+      "p_value_exact_two_sided": 0.129692,
+      "significant_at_0.05": false
+    }
+  }
+}
